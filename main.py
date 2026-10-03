@@ -9,7 +9,7 @@ from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder
 
 import config
-from handlers import common, download, library, navidrome, system
+from handlers import common, download, library, navidrome, system, users
 
 # Configure application logging
 logging.basicConfig(
@@ -29,6 +29,7 @@ async def post_init(application: Application) -> None:
         BotCommand("delete", "Permanently remove an album folder"),
         BotCommand("rescan", "Trigger instant Navidrome library scan"),
         BotCommand("scanstatus", "View Navidrome scan status"),
+        BotCommand("users", "Manage Navidrome user accounts"),
         BotCommand("storage", "Check disk space & library stats"),
         BotCommand("status", "Check bot, tool, and Navidrome health"),
         BotCommand("help", "Show help and syntax guide"),
@@ -53,6 +54,7 @@ def build_application() -> Application:
         library.router,
         navidrome.router,
         system.router,
+        users.router,
     ]
 
     for router in routers:

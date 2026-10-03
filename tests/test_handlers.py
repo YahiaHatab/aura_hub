@@ -1,9 +1,9 @@
 """Integration and smoke tests for Telegram bot handler routers and application builder."""
 
 import unittest
-from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
+from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, MessageHandler
 
-from handlers import common, download, library, navidrome, system
+from handlers import common, download, library, navidrome, system, users
 from main import build_application
 
 
@@ -14,6 +14,7 @@ class TestHandlersAndApplication(unittest.TestCase):
         self.assertGreater(len(library.router), 0)
         self.assertGreater(len(navidrome.router), 0)
         self.assertGreater(len(system.router), 0)
+        self.assertGreater(len(users.router), 0)
 
     def test_build_application(self):
         app = build_application()
@@ -23,6 +24,7 @@ class TestHandlersAndApplication(unittest.TestCase):
         registered_commands = set()
         has_callback_handler = False
         has_message_handler = False
+        has_conversation_handler = False
 
         for group_handlers in app.handlers.values():
             for handler in group_handlers:
@@ -32,6 +34,11 @@ class TestHandlersAndApplication(unittest.TestCase):
                     has_callback_handler = True
                 elif isinstance(handler, MessageHandler):
                     has_message_handler = True
+                elif isinstance(handler, ConversationHandler):
+                    has_conversation_handler = True
+                    for entry in handler.entry_points:
+                        if isinstance(entry, CommandHandler):
+                            registered_commands.update(entry.commands)
 
         expected_commands = {
             "start",
@@ -45,6 +52,8 @@ class TestHandlersAndApplication(unittest.TestCase):
             "remove",
             "rescan",
             "scanstatus",
+            "users",
+            "adduser",
             "storage",
             "disk",
         }
@@ -54,6 +63,7 @@ class TestHandlersAndApplication(unittest.TestCase):
 
         self.assertTrue(has_callback_handler, "No CallbackQueryHandlers registered")
         self.assertTrue(has_message_handler, "No MessageHandlers registered (auto link catcher missing)")
+        self.assertTrue(has_conversation_handler, "No ConversationHandler registered (add user conversation missing)")
 
 
 if __name__ == "__main__":

@@ -148,6 +148,95 @@ class NavidromeClient:
             }
         return res
 
+    def get_users(self) -> Dict[str, Any]:
+        """Fetches list of all users from Navidrome (/rest/getUsers)."""
+        res = self._request("getUsers")
+        if res.get("ok"):
+            sub_resp = res.get("data", {})
+            users_container = sub_resp.get("users", {})
+            raw_users = users_container.get("user", [])
+            if isinstance(raw_users, dict):
+                raw_users = [raw_users]
+            return {"ok": True, "users": raw_users}
+        return res
+
+    def get_user(self, username: str) -> Dict[str, Any]:
+        """Fetches details for a specific user (/rest/getUser)."""
+        res = self._request("getUser", {"username": username})
+        if res.get("ok"):
+            sub_resp = res.get("data", {})
+            user_data = sub_resp.get("user", {})
+            return {"ok": True, "user": user_data}
+        return res
+
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        email: str = "",
+        admin_role: bool = False,
+        stream_role: bool = True,
+        download_role: bool = True,
+    ) -> Dict[str, Any]:
+        """Creates a new user account in Navidrome (/rest/createUser)."""
+        extra: Dict[str, Any] = {
+            "username": username,
+            "password": password,
+            "adminRole": admin_role,
+            "streamRole": stream_role,
+            "downloadRole": download_role,
+        }
+        if email:
+            extra["email"] = email
+
+        res = self._request("createUser", extra)
+        if res.get("ok"):
+            return {
+                "ok": True,
+                "message": f"User '{username}' created successfully.",
+            }
+        return res
+
+    def update_user(
+        self,
+        username: str,
+        password: Optional[str] = None,
+        email: Optional[str] = None,
+        admin_role: Optional[bool] = None,
+        stream_role: Optional[bool] = None,
+        download_role: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Updates an existing user account in Navidrome (/rest/updateUser)."""
+        extra: Dict[str, Any] = {"username": username}
+        if password is not None:
+            extra["password"] = password
+        if email is not None:
+            extra["email"] = email
+        if admin_role is not None:
+            extra["adminRole"] = admin_role
+        if stream_role is not None:
+            extra["streamRole"] = stream_role
+        if download_role is not None:
+            extra["downloadRole"] = download_role
+
+        res = self._request("updateUser", extra)
+        if res.get("ok"):
+            return {
+                "ok": True,
+                "message": f"User '{username}' updated successfully.",
+            }
+        return res
+
+    def delete_user(self, username: str) -> Dict[str, Any]:
+        """Deletes a user account from Navidrome (/rest/deleteUser)."""
+        res = self._request("deleteUser", {"username": username})
+        if res.get("ok"):
+            return {
+                "ok": True,
+                "message": f"User '{username}' deleted successfully.",
+            }
+        return res
+
 
 # Global singleton instance initialized from config
 navidrome_client = NavidromeClient()

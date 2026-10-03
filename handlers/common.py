@@ -45,6 +45,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• *Duration & Phonetic Alignment:* Eliminates scrambled track names\n"
         "• *LRCLIB Synced Lyrics:* Automatic `.lrc` companion files for karaoke\n"
         "• *Navidrome Subsonic Integration:* Instant `/rescan` library synchronization\n"
+        "• *User Management:* `/users` manage Navidrome accounts & passwords\n"
         "• *Interactive Library Manager:* `/retag` and `/delete` albums visually\n\n"
         "Send any Spotify/YouTube link, or type `/search <name>` to begin!"
     )
@@ -68,7 +69,8 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/delete` — browse folders to permanently remove albums\n\n"
         "*5. Navidrome Server Management:*\n"
         "`/rescan` — trigger an instant Subsonic library scan\n"
-        "`/scanstatus` — view ongoing Navidrome scan metrics\n\n"
+        "`/scanstatus` — view ongoing Navidrome scan metrics\n"
+        "`/users` — manage Navidrome user accounts, passwords & roles\n\n"
         "*6. System & Storage:*\n"
         "`/storage` or `/disk` — view disk metrics and indexed files\n"
         "`/status` — check bot, tool, and Navidrome health"

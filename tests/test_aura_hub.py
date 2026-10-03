@@ -173,6 +173,57 @@ class TestNavidromeClient(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertIn("not configured", res["message"])
 
+        users_res = client.get_users()
+        self.assertFalse(users_res["ok"])
+
+    def test_user_management_methods(self):
+        client = NavidromeClient(
+            base_url="http://navidrome.local:4533",
+            username="admin",
+            password="secretpassword",
+        )
+
+        # 1. get_users with list normalization
+        with patch.object(client, "_request", return_value={"ok": True, "data": {"users": {"user": {"username": "admin", "adminRole": True}}}}):
+            res = client.get_users()
+            self.assertTrue(res["ok"])
+            self.assertEqual(len(res["users"]), 1)
+            self.assertEqual(res["users"][0]["username"], "admin")
+
+        # 2. get_user
+        with patch.object(client, "_request", return_value={"ok": True, "data": {"user": {"username": "alice", "email": "alice@test.com"}}}):
+            res = client.get_user("alice")
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["user"]["username"], "alice")
+
+        # 3. create_user
+        with patch.object(client, "_request", return_value={"ok": True}) as mock_req:
+            res = client.create_user("bob", "password123", email="bob@test.com", admin_role=False)
+            self.assertTrue(res["ok"])
+            mock_req.assert_called_once_with("createUser", {
+                "username": "bob",
+                "password": "password123",
+                "adminRole": False,
+                "streamRole": True,
+                "downloadRole": True,
+                "email": "bob@test.com",
+            })
+
+        # 4. update_user
+        with patch.object(client, "_request", return_value={"ok": True}) as mock_req:
+            res = client.update_user("bob", password="newpass123")
+            self.assertTrue(res["ok"])
+            mock_req.assert_called_once_with("updateUser", {
+                "username": "bob",
+                "password": "newpass123",
+            })
+
+        # 5. delete_user
+        with patch.object(client, "_request", return_value={"ok": True}) as mock_req:
+            res = client.delete_user("bob")
+            self.assertTrue(res["ok"])
+            mock_req.assert_called_once_with("deleteUser", {"username": "bob"})
+
 
 if __name__ == "__main__":
     unittest.main()

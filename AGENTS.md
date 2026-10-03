@@ -42,7 +42,8 @@ aura_hub/
 │   ├── download.py           # Direct URL auto-catcher, /download, /genius, /search (interactive buttons)
 │   ├── library.py            # /retag (interactive album browser), /delete (with confirmation dialog)
 │   ├── navidrome.py          # /rescan (triggers instant Navidrome Subsonic library scan), /scanstatus
-│   └── system.py             # /storage, /disk metrics
+│   ├── system.py             # /storage, /disk metrics
+│   └── users.py              # /users, /adduser, password reset, and account deletion
 └── tests/
     ├── test_aura_hub.py      # Unit tests for helpers, keyboards, system services, and Navidrome client
     └── test_handlers.py      # Integration tests verifying router mounting and application building
@@ -123,10 +124,18 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
   - Salt: Random 12-character hex string.
   - Token: `md5(password + salt)`.
   - Protocol version: `1.16.1`.
-- Endpoints wrapped: `ping`, `startScan`, `getScanStatus`.
+- Endpoints wrapped:
+  - System: `ping`, `startScan`, `getScanStatus`.
+  - User Management: `getUsers`, `getUser`, `createUser`, `updateUser`, `deleteUser`.
 - If credentials are not set in `config.py`, methods return a graceful dictionary `{"ok": False, "message": "..."}` instead of raising unhandled exceptions.
 
-### 4.6 File Deletion Security (`services/system.py`)
+### 4.6 User Account Administration (`handlers/users.py`)
+- **`/users` Command:** Displays all registered Subsonic accounts with roles (`[👑 Admin]`, `[🎧 Stream]`, `[📥 Download]`).
+- **Interactive Actions:** Per-user card with buttons to reset passwords (`secrets.token_urlsafe(10)`) or trigger deletion with two-step confirmation safeguards.
+- **Add User Flow:** Interactive `ConversationHandler` triggered via `/adduser` or inline button.
+- **Security:** Strict admin enforcement via `@auth_required` decorator and built-in protection against deleting the primary configured server admin.
+
+### 4.7 File Deletion Security (`services/system.py`)
 - `delete_album_folder(rel_path)` validates that `(BASE_DOWNLOAD_DIR / rel_path).resolve()` is strictly within `BASE_DOWNLOAD_DIR` using `Path.relative_to()`. This completely prevents directory traversal exploits.
 - Automatically deletes empty parent artist directories if no other albums remain.
 
@@ -146,6 +155,8 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 | `/delete`, `/remove` | `handlers/library.py` | Interactive album browser with confirmation dialog for folder removal |
 | `/rescan` | `handlers/navidrome.py` | Triggers immediate Navidrome Subsonic library scan |
 | `/scanstatus` | `handlers/navidrome.py` | Checks active scan progress and track counts |
+| `/users` | `handlers/users.py` | Lists Navidrome accounts with manage/reset/delete buttons |
+| `/adduser` | `handlers/users.py` | Interactive conversation flow to create a new Subsonic account |
 | `/storage`, `/disk` | `handlers/system.py` | Displays disk partition metrics and indexed MP3/LRC counts |
 
 *Direct Link Auto-Catcher:* Pasting any raw YouTube or Spotify link directly into chat triggers `execute_task()` automatically.
