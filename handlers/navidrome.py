@@ -4,13 +4,13 @@ import logging
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
-from handlers.common import auth_required
+from handlers.common import admin_required, auth_required
 from services.navidrome import navidrome_client
 
 logger = logging.getLogger(__name__)
 
 
-@auth_required
+@admin_required
 async def rescan_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Triggers an instant Navidrome Subsonic library scan (/rest/startScan)."""
     if not update.effective_message:

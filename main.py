@@ -9,7 +9,7 @@ from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder
 
 import config
-from handlers import common, download, library, navidrome, system, users
+from handlers import common, download, library, navidrome, request, system, users
 
 # Configure application logging
 logging.basicConfig(
@@ -22,14 +22,16 @@ logger = logging.getLogger("aura_hub")
 async def post_init(application: Application) -> None:
     """Configures bot menu commands visible in Telegram clients."""
     commands = [
-        BotCommand("download", "Download Spotify/YouTube URL"),
+        BotCommand("request", "Request music for ingestion"),
         BotCommand("search", "Search tracks on YouTube with interactive buttons"),
-        BotCommand("genius", "Download with explicit Genius album match"),
-        BotCommand("retag", "Browse folders to update tags & .lrc"),
-        BotCommand("delete", "Permanently remove an album folder"),
-        BotCommand("rescan", "Trigger instant Navidrome library scan"),
+        BotCommand("download", "Download Spotify/YouTube URL (Admin)"),
+        BotCommand("genius", "Download with explicit Genius album match (Admin)"),
+        BotCommand("retag", "Browse folders to update tags & .lrc (Admin)"),
+        BotCommand("delete", "Permanently remove an album folder (Admin)"),
+        BotCommand("rescan", "Trigger instant Navidrome library scan (Admin)"),
         BotCommand("scanstatus", "View Navidrome scan status"),
-        BotCommand("users", "Manage Navidrome user accounts"),
+        BotCommand("users", "Manage Navidrome user accounts (Admin)"),
+        BotCommand("requests", "View music request queue (Admin)"),
         BotCommand("storage", "Check disk space & library stats"),
         BotCommand("status", "Check bot, tool, and Navidrome health"),
         BotCommand("help", "Show help and syntax guide"),
@@ -53,6 +55,7 @@ def build_application() -> Application:
         download.router,
         library.router,
         navidrome.router,
+        request.router,
         system.router,
         users.router,
     ]

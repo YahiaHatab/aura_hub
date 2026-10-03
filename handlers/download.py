@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 import config
-from handlers.common import auth_required
+from handlers.common import admin_required, auth_required, is_admin
 from services.downloader import executor, run_pipeline, run_youtube_search
 from services.navidrome import navidrome_client
 from utils.keyboards import build_search_results_keyboard
@@ -103,22 +103,36 @@ async def execute_task(
 
 @auth_required
 async def auto_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Automatically triggers download when a Spotify or YouTube link is pasted into chat."""
+    """Automatically triggers download for admins or queues an ingestion request for standard users."""
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
-    await execute_task(update, context, text, "")
+    user = update.effective_user
+    if user and is_admin(user.id):
+        await execute_task(update, context, text, "")
+    else:
+        from handlers.request import submit_request
+        await submit_request(update, context, text)
 
 
 @auth_required
 async def download_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /download command with optional Genius match syntax (URL | GeniusURL)."""
+    """Handles /download command with optional Genius match syntax (URL | GeniusURL).
+
+    Admins download immediately; standard users are routed to the request queue.
+    """
     if not update.message or not update.message.text:
         return
 
     raw_args = update.message.text.partition(" ")[2].strip()
     if not raw_args:
         await update.message.reply_text("Please provide a link. Example:\n`/download <url>`", parse_mode="Markdown")
+        return
+
+    user = update.effective_user
+    if user and not is_admin(user.id):
+        from handlers.request import submit_request
+        await submit_request(update, context, raw_args)
         return
 
     genius_input = ""
@@ -132,7 +146,7 @@ async def download_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await execute_task(update, context, media_url, genius_input)
 
 
-@auth_required
+@admin_required
 async def genius_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /genius command requiring explicit <media_url> | <genius_url> pairing."""
     if not update.message or not update.message.text:
@@ -208,6 +222,16 @@ async def search_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     chosen_item = results[idx]
     chosen_url = chosen_item["url"]
     chosen_title = chosen_item.get("title", "")
+
+    user = update.effective_user
+    if user and not is_admin(user.id):
+        from handlers.request import submit_request
+        await query.edit_message_text(
+            f"📥 *Queueing request for:* `{chosen_title}`...",
+            parse_mode="Markdown",
+        )
+        await submit_request(update, context, chosen_url, custom_title=chosen_title)
+        return
 
     await query.edit_message_text(
         f"⏳ `[1/4]` *Starting download for:*\n`{chosen_title}`...",

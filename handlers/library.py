@@ -9,7 +9,7 @@ from telegram import Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
 import config
-from handlers.common import auth_required
+from handlers.common import admin_required, is_admin
 from services.downloader import executor, run_retag_folder
 from services.navidrome import navidrome_client
 from services.system import delete_album_folder, get_album_folders
@@ -18,7 +18,7 @@ from utils.keyboards import build_confirmation_keyboard, build_folder_keyboard
 logger = logging.getLogger(__name__)
 
 
-@auth_required
+@admin_required
 async def retag_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Presents a paginated folder browser to repair ID3 tags and fetch synced lyrics."""
     folders = get_album_folders()
@@ -38,7 +38,7 @@ async def retag_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-@auth_required
+@admin_required
 async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Presents a paginated folder browser to delete an album from the server."""
     folders = get_album_folders()
@@ -61,7 +61,9 @@ async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def library_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles pagination, selection, and confirmation for /retag and /delete."""
     query = update.callback_query
-    if not query:
+    if not query or not query.from_user or not is_admin(query.from_user.id):
+        if query:
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return
     await query.answer()
 

@@ -28,13 +28,26 @@ TELEGRAM_BOT_TOKEN = os.environ.get(
     "TELEGRAM_BOT_TOKEN", "8931396589:AAEFjxpKr6AC5dEbcxt61QADWVXqlxVjpKI"
 )
 
-# Parse allowed user IDs (comma-separated string or single integer)
+# Parse allowed and admin user IDs as sets
 _raw_allowed = os.environ.get("ALLOWED_USER_IDS", "1497076788")
-ALLOWED_USER_IDS = [
+ALLOWED_USER_IDS: set[int] = {
     int(uid.strip())
     for uid in _raw_allowed.split(",")
     if uid.strip().isdigit()
-]
+}
+
+_raw_admins = os.environ.get("ADMIN_USER_IDS", "")
+if _raw_admins.strip():
+    ADMIN_USER_IDS: set[int] = {
+        int(uid.strip())
+        for uid in _raw_admins.split(",")
+        if uid.strip().isdigit()
+    }
+else:
+    ADMIN_USER_IDS = set(ALLOWED_USER_IDS)
+
+# Ensure all admins are also included in the allowed users set
+ALLOWED_USER_IDS.update(ADMIN_USER_IDS)
 
 # ================= API KEYS & SECRETS =================
 GENIUS_ACCESS_TOKEN = os.environ.get(

@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 import config
-from handlers.common import auth_required, is_authorized
+from handlers.common import admin_required, is_admin
 from services.navidrome import navidrome_client
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ def _build_users_list_view(users: List[Dict[str, Any]]) -> tuple[str, InlineKeyb
     return text, InlineKeyboardMarkup(keyboard)
 
 
-@auth_required
+@admin_required
 async def users_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for /users command. Lists Navidrome accounts with interactive buttons."""
     if not update.effective_message:
@@ -103,9 +103,9 @@ async def users_command_handler(update: Update, context: ContextTypes.DEFAULT_TY
 async def user_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Refreshes or navigates back to the main users list."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return
     await query.answer()
 
@@ -123,9 +123,9 @@ async def user_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def user_manage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the action card for an individual Navidrome user account."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return
     await query.answer()
 
@@ -162,9 +162,9 @@ async def user_manage_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def user_edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Presents the edit options menu: Change Username or Change Password."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return
     await query.answer()
 
@@ -191,9 +191,9 @@ async def user_edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_
 async def user_delete_prompt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Presents a confirmation dialog before permanently removing an account."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return
     await query.answer()
 
@@ -228,9 +228,9 @@ async def user_delete_prompt_callback(update: Update, context: ContextTypes.DEFA
 async def user_delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Executes the deleteUser API call upon user confirmation."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return
     await query.answer()
 
@@ -267,9 +267,9 @@ async def user_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def start_add_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the add-user conversation from an inline button."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return ConversationHandler.END
     await query.answer()
 
@@ -291,7 +291,7 @@ async def start_add_user_callback(update: Update, context: ContextTypes.DEFAULT_
     return WAITING_ADD_USER_INPUT
 
 
-@auth_required
+@admin_required
 async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the add-user conversation from /adduser command."""
     if not update.effective_message:
@@ -320,7 +320,7 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def process_add_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Processes user input, calls createUser API, and responds with credentials."""
     user = update.effective_user
-    if not user or not is_authorized(user.id) or not update.message or not update.message.text:
+    if not user or not is_admin(user.id) or not update.message or not update.message.text:
         return ConversationHandler.END
 
     text = update.message.text.strip()
@@ -371,9 +371,9 @@ async def process_add_user_input(update: Update, context: ContextTypes.DEFAULT_T
 async def start_edit_username_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompts for a new username."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return ConversationHandler.END
     await query.answer()
 
@@ -405,7 +405,7 @@ async def start_edit_username_callback(update: Update, context: ContextTypes.DEF
 async def process_new_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Updates the username in Navidrome."""
     user = update.effective_user
-    if not user or not is_authorized(user.id) or not update.message or not update.message.text:
+    if not user or not is_admin(user.id) or not update.message or not update.message.text:
         return ConversationHandler.END
 
     target_user = context.user_data.get("edit_target_user")
@@ -445,9 +445,9 @@ async def process_new_username(update: Update, context: ContextTypes.DEFAULT_TYP
 async def start_edit_password_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Presents options to auto-generate or type a custom password."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return ConversationHandler.END
     await query.answer()
 
@@ -475,9 +475,9 @@ async def start_edit_password_callback(update: Update, context: ContextTypes.DEF
 async def auto_generate_password_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Instantly generates and assigns a secure random password."""
     query = update.callback_query
-    if not query or not query.from_user or not is_authorized(query.from_user.id):
+    if not query or not query.from_user or not is_admin(query.from_user.id):
         if query:
-            await query.answer("⛔ Unauthorized", show_alert=True)
+            await query.answer("⛔ Admin privileges required.", show_alert=True)
         return ConversationHandler.END
     await query.answer()
 
@@ -511,7 +511,7 @@ async def auto_generate_password_callback(update: Update, context: ContextTypes.
 async def process_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Applies a custom typed password to the Navidrome account."""
     user = update.effective_user
-    if not user or not is_authorized(user.id) or not update.message or not update.message.text:
+    if not user or not is_admin(user.id) or not update.message or not update.message.text:
         return ConversationHandler.END
 
     target_user = context.user_data.get("edit_target_user")

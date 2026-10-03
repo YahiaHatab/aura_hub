@@ -225,6 +225,24 @@ class TestNavidromeClient(unittest.TestCase):
             mock_native.assert_called_once_with("DELETE", "user/uid123")
 
 
+class TestAuthAndRequestQueue(unittest.TestCase):
+    def test_auth_checks(self):
+        from handlers.common import is_admin, is_authorized
+        with patch("config.ADMIN_USER_IDS", {111}), patch("config.ALLOWED_USER_IDS", {111, 222}):
+            self.assertTrue(is_admin(111))
+            self.assertFalse(is_admin(222))
+            self.assertFalse(is_admin(333))
+
+            self.assertTrue(is_authorized(111))
+            self.assertTrue(is_authorized(222))
+            self.assertFalse(is_authorized(333))
+
+    def test_request_safe_md(self):
+        from handlers.request import _safe_md
+        self.assertEqual(_safe_md("Amr Diab `Tamally Maak`"), "Amr Diab 'Tamally Maak'")
+        self.assertEqual(_safe_md("Standard Title"), "Standard Title")
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -42,6 +42,7 @@ aura_hub/
 │   ├── download.py           # Direct URL auto-catcher, /download, /genius, /search (interactive buttons)
 │   ├── library.py            # /retag (interactive album browser), /delete (with confirmation dialog)
 │   ├── navidrome.py          # /rescan (triggers instant Navidrome Subsonic library scan), /scanstatus
+│   ├── request.py            # /request queue, admin approval/rejection cards, ingestion pipeline
 │   ├── system.py             # /storage, /disk metrics
 │   └── users.py              # /users, /adduser, password reset, and account deletion
 └── tests/
@@ -139,27 +140,39 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 - `delete_album_folder(rel_path)` validates that `(BASE_DOWNLOAD_DIR / rel_path).resolve()` is strictly within `BASE_DOWNLOAD_DIR` using `Path.relative_to()`. This completely prevents directory traversal exploits.
 - Automatically deletes empty parent artist directories if no other albums remain.
 
+### 4.8 Music Request & Ingestion Queue (`handlers/request.py`)
+- **Dual-Tier Access Control:**
+  - `ADMIN_USER_IDS`: Granted full server management, media deletion, user account management, and request approval/rejection.
+  - `ALLOWED_USER_IDS`: Granted general bot access, YouTube search, and the ability to submit music requests.
+- **Smart Link Catcher:** When an admin pastes a Spotify or YouTube URL into chat, it immediately triggers the direct download pipeline. When a standard allowed user pastes a URL, it automatically submits it as a request to the ingestion queue.
+- **In-Memory Request Registry:** Stores pending items with unique hex IDs, requester credentials, and target search query or URL.
+- **Admin Approval Card:** Dispatches an interactive card with `[✅ Approve & Ingest]` and `[❌ Reject]` buttons to all configured administrators.
+- **Non-Blocking Background Pipeline:** Upon approval, resolves query via YouTube search if needed, streams audio, matches tags via MusicBrainz/AcoustID, fetches synced `.lrc` lyrics via LRCLIB, initiates an instant Navidrome Subsonic scan, and delivers completion notifications (with cover art) to both the approving admin and the requester.
+- **Rejection Notification:** On rejection, marks the request as rejected, updates admin cards across chats, and notifies the requester.
+
 ---
 
 ## 5. Telegram Bot Command Reference
 
-| Command | Handler File | Description |
-| :--- | :--- | :--- |
-| `/start` | `handlers/common.py` | Welcome card and feature overview |
-| `/help` | `handlers/common.py` | Syntax guide and examples |
-| `/status` | `handlers/common.py` | Health check for Bot, external binaries (`yt-dlp`, `spotdl`, `fpcalc`), and Navidrome ping |
-| `/download <url>` | `handlers/download.py` | Downloads and tags Spotify/YouTube URL |
-| `/genius <url> \| <g_url>` | `handlers/download.py` | Explicit Genius URL pairing |
-| `/search <query>` | `handlers/download.py` | Interactive YouTube search with clickable download buttons |
-| `/retag` | `handlers/library.py` | Interactive paginated album browser to refresh ID3 tags and `.lrc` |
-| `/delete`, `/remove` | `handlers/library.py` | Interactive album browser with confirmation dialog for folder removal |
-| `/rescan` | `handlers/navidrome.py` | Triggers immediate Navidrome Subsonic library scan |
-| `/scanstatus` | `handlers/navidrome.py` | Checks active scan progress and track counts |
-| `/users` | `handlers/users.py` | Lists Navidrome accounts with manage/reset/delete buttons |
-| `/adduser` | `handlers/users.py` | Interactive conversation flow to create a new Subsonic account |
-| `/storage`, `/disk` | `handlers/system.py` | Displays disk partition metrics and indexed MP3/LRC counts |
+| Command | Handler File | Access Tier | Description |
+| :--- | :--- | :--- | :--- |
+| `/start` | `handlers/common.py` | All Users | Welcome card and feature overview |
+| `/help` | `handlers/common.py` | All Users | Syntax guide and examples |
+| `/status` | `handlers/common.py` | All Users | Health check for Bot, external binaries, and Navidrome ping |
+| `/request <link or query>` | `handlers/request.py` | All Users | Queue a track, album, or URL for admin review |
+| `/search <query>` | `handlers/download.py` | All Users | Interactive YouTube search (downloads for admins, queues for users) |
+| `/download <url>` | `handlers/download.py` | Admins | Direct download and tagging (routes users to `/request`) |
+| `/genius <url> \| <g_url>` | `handlers/download.py` | Admins | Explicit Genius URL pairing |
+| `/retag` | `handlers/library.py` | Admins | Interactive paginated album browser to refresh ID3 tags and `.lrc` |
+| `/delete`, `/remove` | `handlers/library.py` | Admins | Interactive album browser with confirmation dialog for folder removal |
+| `/rescan` | `handlers/navidrome.py` | Admins | Triggers immediate Navidrome Subsonic library scan |
+| `/scanstatus` | `handlers/navidrome.py` | All Users | Checks active scan progress and track counts |
+| `/users` | `handlers/users.py` | Admins | Lists Navidrome accounts with manage/edit/delete buttons |
+| `/adduser` | `handlers/users.py` | Admins | Interactive conversation flow to create a new Subsonic account |
+| `/requests` | `handlers/request.py` | Admins | View pending and recent items in the ingestion queue |
+| `/storage`, `/disk` | `handlers/system.py` | All Users | Displays disk partition metrics and indexed MP3/LRC counts |
 
-*Direct Link Auto-Catcher:* Pasting any raw YouTube or Spotify link directly into chat triggers `execute_task()` automatically.
+*Direct Link Auto-Catcher:* Pasting any raw YouTube or Spotify link directly into chat downloads immediately for administrators, or queues an ingestion request for standard allowed users.
 
 ---
 
@@ -179,6 +192,7 @@ uv run --with-requirements requirements.txt python -m unittest discover tests
 Environment variables can be supplied in a `.env` file or exported in the host shell:
 ```bash
 TELEGRAM_BOT_TOKEN="your_bot_token"
+ADMIN_USER_IDS="1497076788"
 ALLOWED_USER_IDS="1497076788,987654321"
 GENIUS_ACCESS_TOKEN="your_genius_token"
 ACOUSTID_API_KEY="your_acoustid_key"
