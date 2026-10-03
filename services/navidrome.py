@@ -10,7 +10,7 @@ import logging
 import secrets
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import config
 
@@ -31,10 +31,81 @@ class NavidromeClient:
         self.password = password if password is not None else config.NAVIDROME_PASS
         self.client_name = "AuraHub"
         self.api_version = "1.16.1"
+        self._jwt_token: Optional[str] = None
 
     def is_configured(self) -> bool:
         """Returns True if Navidrome URL, username, and password are configured."""
         return bool(self.base_url and self.username and self.password)
+
+    def _get_native_token(self, force_refresh: bool = False) -> Optional[str]:
+        """Authenticates with Navidrome's native REST API (/auth/login) to obtain a JWT bearer token."""
+        if not self.is_configured():
+            return None
+
+        if self._jwt_token and not force_refresh:
+            return self._jwt_token
+
+        try:
+            login_url = f"{self.base_url}/auth/login"
+            payload = json.dumps({"username": self.username, "password": self.password}).encode("utf-8")
+            req = urllib.request.Request(
+                login_url,
+                data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "AuraHub/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                token = data.get("token")
+                if token:
+                    self._jwt_token = token
+                    return token
+        except Exception as e:
+            logger.debug(f"Native Navidrome login failed: {e}")
+
+        return None
+
+    def _native_request(
+        self,
+        method: str,
+        endpoint: str,
+        body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Any]:
+        """Sends an authenticated request to Navidrome's native REST API (/api/...)."""
+        token = self._get_native_token()
+        if not token:
+            return False, "Failed to authenticate with Navidrome native API."
+
+        url = f"{self.base_url}/api/{endpoint}"
+        payload = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {
+            "Content-Type": "application/json",
+            "x-nd-authorization": f"Bearer {token}",
+            "User-Agent": "AuraHub/1.0",
+        }
+
+        req = urllib.request.Request(url, data=payload, headers=headers, method=method.upper())
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp_text = resp.read().decode("utf-8")
+                data = json.loads(resp_text) if resp_text else {}
+                return True, data
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                # Token might have expired; retry once with a refreshed token
+                refreshed_token = self._get_native_token(force_refresh=True)
+                if refreshed_token:
+                    headers["x-nd-authorization"] = f"Bearer {refreshed_token}"
+                    retry_req = urllib.request.Request(url, data=payload, headers=headers, method=method.upper())
+                    try:
+                        with urllib.request.urlopen(retry_req, timeout=10) as retry_resp:
+                            resp_text = retry_resp.read().decode("utf-8")
+                            return True, json.loads(resp_text) if resp_text else {}
+                    except Exception:
+                        pass
+            return False, f"Navidrome HTTP Error {e.code}: {e.reason}"
+        except Exception as e:
+            return False, f"Native API error: {e}"
 
     def _build_auth_params(self) -> Dict[str, str]:
         """Generates standard Subsonic token authentication parameters (t = md5(password + salt))."""
@@ -149,7 +220,28 @@ class NavidromeClient:
         return res
 
     def get_users(self) -> Dict[str, Any]:
-        """Fetches list of all users from Navidrome (/rest/getUsers)."""
+        """Fetches list of all users from Navidrome (uses Native API first, Subsonic fallback)."""
+        # 1. Try Navidrome native REST API (authoritative full user list)
+        ok, native_users = self._native_request("GET", "user")
+        if ok and isinstance(native_users, list):
+            users: List[Dict[str, Any]] = []
+            for u in native_users:
+                uname = u.get("userName") or u.get("name") or "Unknown"
+                users.append(
+                    {
+                        "id": u.get("id"),
+                        "username": uname,
+                        "name": u.get("name", uname),
+                        "email": u.get("email", ""),
+                        "adminRole": bool(u.get("isAdmin")),
+                        "streamRole": True,
+                        "downloadRole": True,
+                        "lastLoginAt": u.get("lastLoginAt"),
+                    }
+                )
+            return {"ok": True, "users": users}
+
+        # 2. Subsonic fallback
         res = self._request("getUsers")
         if res.get("ok"):
             sub_resp = res.get("data", {})
@@ -161,7 +253,14 @@ class NavidromeClient:
         return res
 
     def get_user(self, username: str) -> Dict[str, Any]:
-        """Fetches details for a specific user (/rest/getUser)."""
+        """Fetches details for a specific user (uses Native API first, Subsonic fallback)."""
+        all_res = self.get_users()
+        if all_res.get("ok"):
+            for u in all_res.get("users", []):
+                if u.get("username", "").lower() == username.lower():
+                    return {"ok": True, "user": u}
+
+        # Subsonic fallback
         res = self._request("getUser", {"username": username})
         if res.get("ok"):
             sub_resp = res.get("data", {})
@@ -178,7 +277,19 @@ class NavidromeClient:
         stream_role: bool = True,
         download_role: bool = True,
     ) -> Dict[str, Any]:
-        """Creates a new user account in Navidrome (/rest/createUser)."""
+        """Creates a new user account in Navidrome (uses Native API first, Subsonic fallback)."""
+        payload = {
+            "userName": username,
+            "name": username,
+            "password": password,
+            "email": email,
+            "isAdmin": admin_role,
+        }
+        ok, resp = self._native_request("POST", "user", payload)
+        if ok:
+            return {"ok": True, "message": f"User '{username}' created successfully."}
+
+        # Subsonic fallback
         extra: Dict[str, Any] = {
             "username": username,
             "password": password,
@@ -200,13 +311,36 @@ class NavidromeClient:
     def update_user(
         self,
         username: str,
+        new_username: Optional[str] = None,
         password: Optional[str] = None,
         email: Optional[str] = None,
         admin_role: Optional[bool] = None,
         stream_role: Optional[bool] = None,
         download_role: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Updates an existing user account in Navidrome (/rest/updateUser)."""
+        """Updates an existing user account in Navidrome (uses Native API first, Subsonic fallback)."""
+        # Look up user ID
+        user_res = self.get_user(username)
+        user_id = user_res.get("user", {}).get("id") if user_res.get("ok") else None
+
+        if user_id:
+            payload: Dict[str, Any] = {}
+            if new_username is not None:
+                payload["userName"] = new_username
+                payload["name"] = new_username
+            if password is not None:
+                payload["password"] = password
+            if email is not None:
+                payload["email"] = email
+            if admin_role is not None:
+                payload["isAdmin"] = admin_role
+
+            ok, resp = self._native_request("PUT", f"user/{user_id}", payload)
+            if ok:
+                display_name = new_username or username
+                return {"ok": True, "message": f"User '{display_name}' updated successfully."}
+
+        # Subsonic fallback
         extra: Dict[str, Any] = {"username": username}
         if password is not None:
             extra["password"] = password
@@ -228,7 +362,17 @@ class NavidromeClient:
         return res
 
     def delete_user(self, username: str) -> Dict[str, Any]:
-        """Deletes a user account from Navidrome (/rest/deleteUser)."""
+        """Deletes a user account from Navidrome (uses Native API first, Subsonic fallback)."""
+        # Look up user ID
+        user_res = self.get_user(username)
+        user_id = user_res.get("user", {}).get("id") if user_res.get("ok") else None
+
+        if user_id:
+            ok, resp = self._native_request("DELETE", f"user/{user_id}")
+            if ok:
+                return {"ok": True, "message": f"User '{username}' deleted successfully."}
+
+        # Subsonic fallback
         res = self._request("deleteUser", {"username": username})
         if res.get("ok"):
             return {

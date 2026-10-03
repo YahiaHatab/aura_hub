@@ -183,46 +183,46 @@ class TestNavidromeClient(unittest.TestCase):
             password="secretpassword",
         )
 
-        # 1. get_users with list normalization
-        with patch.object(client, "_request", return_value={"ok": True, "data": {"users": {"user": {"username": "admin", "adminRole": True}}}}):
+        # 1. Native API get_users
+        with patch.object(client, "_native_request", return_value=(True, [{"id": "u1", "userName": "Bonga", "isAdmin": False}])):
+            res = client.get_users()
+            self.assertTrue(res["ok"])
+            self.assertEqual(len(res["users"]), 1)
+            self.assertEqual(res["users"][0]["username"], "Bonga")
+
+        # 2. Subsonic fallback get_users
+        with patch.object(client, "_native_request", return_value=(False, "error")), \
+             patch.object(client, "_request", return_value={"ok": True, "data": {"users": {"user": {"username": "admin", "adminRole": True}}}}):
             res = client.get_users()
             self.assertTrue(res["ok"])
             self.assertEqual(len(res["users"]), 1)
             self.assertEqual(res["users"][0]["username"], "admin")
 
-        # 2. get_user
-        with patch.object(client, "_request", return_value={"ok": True, "data": {"user": {"username": "alice", "email": "alice@test.com"}}}):
-            res = client.get_user("alice")
-            self.assertTrue(res["ok"])
-            self.assertEqual(res["user"]["username"], "alice")
-
-        # 3. create_user
-        with patch.object(client, "_request", return_value={"ok": True}) as mock_req:
+        # 3. Native create_user
+        with patch.object(client, "_native_request", return_value=(True, {"id": "new1"})) as mock_native:
             res = client.create_user("bob", "password123", email="bob@test.com", admin_role=False)
             self.assertTrue(res["ok"])
-            mock_req.assert_called_once_with("createUser", {
-                "username": "bob",
+            mock_native.assert_called_once_with("POST", "user", {
+                "userName": "bob",
+                "name": "bob",
                 "password": "password123",
-                "adminRole": False,
-                "streamRole": True,
-                "downloadRole": True,
                 "email": "bob@test.com",
+                "isAdmin": False,
             })
 
-        # 4. update_user
-        with patch.object(client, "_request", return_value={"ok": True}) as mock_req:
+        # 4. Native update_user
+        with patch.object(client, "get_user", return_value={"ok": True, "user": {"id": "uid123", "username": "bob"}}), \
+             patch.object(client, "_native_request", return_value=(True, {"id": "uid123"})) as mock_native:
             res = client.update_user("bob", password="newpass123")
             self.assertTrue(res["ok"])
-            mock_req.assert_called_once_with("updateUser", {
-                "username": "bob",
-                "password": "newpass123",
-            })
+            mock_native.assert_called_once_with("PUT", "user/uid123", {"password": "newpass123"})
 
-        # 5. delete_user
-        with patch.object(client, "_request", return_value={"ok": True}) as mock_req:
+        # 5. Native delete_user
+        with patch.object(client, "get_user", return_value={"ok": True, "user": {"id": "uid123", "username": "bob"}}), \
+             patch.object(client, "_native_request", return_value=(True, {})) as mock_native:
             res = client.delete_user("bob")
             self.assertTrue(res["ok"])
-            mock_req.assert_called_once_with("deleteUser", {"username": "bob"})
+            mock_native.assert_called_once_with("DELETE", "user/uid123")
 
 
 if __name__ == "__main__":

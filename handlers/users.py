@@ -1,6 +1,6 @@
 """Navidrome user management handlers: /users and /adduser.
 
-Allows listing, creating, resetting passwords, and deleting Subsonic user accounts
+Allows listing, creating, editing (username and password), and deleting Subsonic user accounts
 via interactive Telegram menus. Restricted to authorized administrators.
 """
 
@@ -25,7 +25,10 @@ from services.navidrome import navidrome_client
 
 logger = logging.getLogger(__name__)
 
-WAITING_USER_INPUT = 1
+# Conversation states
+WAITING_ADD_USER_INPUT = 1
+WAITING_NEW_USERNAME = 2
+WAITING_NEW_PASSWORD = 3
 
 
 def _format_user_role_badges(user: Dict[str, Any]) -> str:
@@ -149,15 +152,15 @@ async def user_manage_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     keyboard = [
-        [InlineKeyboardButton("🔑 Reset Password", callback_data=f"u_reset:{username}")],
+        [InlineKeyboardButton("✏️ Edit User", callback_data=f"u_edit_menu:{username}")],
         [InlineKeyboardButton("🗑️ Delete User", callback_data=f"u_del:{username}")],
         [InlineKeyboardButton("⬅️ Back to Users", callback_data="u_list")],
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
-async def user_reset_password_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generates a secure random password, updates Navidrome, and returns credentials."""
+async def user_edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Presents the edit options menu: Change Username or Change Password."""
     query = update.callback_query
     if not query or not query.from_user or not is_authorized(query.from_user.id):
         if query:
@@ -168,24 +171,20 @@ async def user_reset_password_callback(update: Update, context: ContextTypes.DEF
     data = query.data or ""
     username = data.split(":", 1)[1] if ":" in data else ""
     if not username:
-        await query.edit_message_text("⚠️ User not specified.")
         return
 
-    new_password = secrets.token_urlsafe(10)
-    res = navidrome_client.update_user(username=username, password=new_password)
+    text = (
+        f"✏️ *Edit Account:* `{username}`\n\n"
+        "What would you like to update?\n"
+        "• *Username:* Rename the user login ID\n"
+        "• *Password:* Set a custom or auto-generated password"
+    )
 
-    if res.get("ok"):
-        text = (
-            f"🔑 *Password Reset Successfully!*\n\n"
-            f"• *Username:* `{username}`\n"
-            f"• *New Password:* `{new_password}`\n\n"
-            "⚠️ _Please copy and share this password with the user immediately._"
-        )
-    else:
-        err = res.get("message", "Unknown error")
-        text = f"❌ *Failed to reset password for `{username}`:*\n`{err}`"
-
-    keyboard = [[InlineKeyboardButton("⬅️ Back to Users", callback_data="u_list")]]
+    keyboard = [
+        [InlineKeyboardButton("👤 Change Username", callback_data=f"u_edit_name:{username}")],
+        [InlineKeyboardButton("🔑 Change Password", callback_data=f"u_edit_pass:{username}")],
+        [InlineKeyboardButton("⬅️ Back to User", callback_data=f"u_manage:{username}")],
+    ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
@@ -260,7 +259,11 @@ async def user_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text("❌ User management panel closed.")
 
 
-# ---------------- CONVERSATION: ADD USER ----------------
+# ================================================================
+# CONVERSATION HANDLERS: ADD USER, EDIT USERNAME, EDIT PASSWORD
+# ================================================================
+
+# --- ADD USER ---
 async def start_add_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the add-user conversation from an inline button."""
     query = update.callback_query
@@ -279,13 +282,13 @@ async def start_add_user_callback(update: Update, context: ContextTypes.DEFAULT_
         "• `sarah SecretPass123`\n\n"
         "Send `/cancel` to abort."
     )
-    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="u_cancel_add")]]
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="u_cancel_conv")]]
     await query.edit_message_text(
         prompt_text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
-    return WAITING_USER_INPUT
+    return WAITING_ADD_USER_INPUT
 
 
 @auth_required
@@ -311,11 +314,11 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Send `/cancel` to abort."
     )
     await update.effective_message.reply_markdown(prompt_text)
-    return WAITING_USER_INPUT
+    return WAITING_ADD_USER_INPUT
 
 
 async def process_add_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Processes user input, calls createUser Subsonic API, and responds with credentials."""
+    """Processes user input, calls createUser API, and responds with credentials."""
     user = update.effective_user
     if not user or not is_authorized(user.id) or not update.message or not update.message.text:
         return ConversationHandler.END
@@ -324,7 +327,7 @@ async def process_add_user_input(update: Update, context: ContextTypes.DEFAULT_T
     parts = text.split()
     if not parts:
         await update.message.reply_text("Please provide at least a username. Try again or type /cancel:")
-        return WAITING_USER_INPUT
+        return WAITING_ADD_USER_INPUT
 
     username = parts[0].strip()
     password = parts[1].strip() if len(parts) > 1 else secrets.token_urlsafe(10)
@@ -335,7 +338,7 @@ async def process_add_user_input(update: Update, context: ContextTypes.DEFAULT_T
             "⚠️ Invalid username. Usernames must be at least 2 characters and contain "
             "only letters, numbers, dots, hyphens, or underscores. Try again or /cancel:"
         )
-        return WAITING_USER_INPUT
+        return WAITING_ADD_USER_INPUT
 
     status_msg = await update.message.reply_text("⏳ Creating account on Navidrome server...")
 
@@ -364,36 +367,230 @@ async def process_add_user_input(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
-async def cancel_add_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Aborts the add user conversation."""
-    if update.effective_message:
-        await update.effective_message.reply_text("❌ User creation cancelled.")
-    return ConversationHandler.END
-
-
-async def cancel_add_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Aborts the add user conversation via button callback."""
+# --- EDIT USERNAME ---
+async def start_edit_username_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompts for a new username."""
     query = update.callback_query
-    if query:
-        await query.answer()
-        await query.edit_message_text("❌ User creation cancelled.")
+    if not query or not query.from_user or not is_authorized(query.from_user.id):
+        if query:
+            await query.answer("⛔ Unauthorized", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+
+    data = query.data or ""
+    username = data.split(":", 1)[1] if ":" in data else ""
+    if not username:
+        return ConversationHandler.END
+
+    if config.NAVIDROME_USER and username.lower() == config.NAVIDROME_USER.lower():
+        await query.edit_message_text(
+            f"⚠️ Cannot rename the primary server admin account (`{username}`) configured in `config.py`.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"u_manage:{username}")]]),
+        )
+        return ConversationHandler.END
+
+    context.user_data["edit_target_user"] = username
+
+    text = (
+        f"👤 *Change Username for:* `{username}`\n\n"
+        "Send the new username in chat.\n"
+        "_(Letters, numbers, underscores, hyphens; min 2 characters)_\n\n"
+        "Send `/cancel` to abort."
+    )
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="u_cancel_conv")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    return WAITING_NEW_USERNAME
+
+
+async def process_new_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Updates the username in Navidrome."""
+    user = update.effective_user
+    if not user or not is_authorized(user.id) or not update.message or not update.message.text:
+        return ConversationHandler.END
+
+    target_user = context.user_data.get("edit_target_user")
+    if not target_user:
+        await update.message.reply_text("⚠️ Session expired. Please start over with `/users`.")
+        return ConversationHandler.END
+
+    new_username = update.message.text.strip()
+    if not re.match(r"^[a-zA-Z0-9_.\-]+$", new_username) or len(new_username) < 2:
+        await update.message.reply_text(
+            "⚠️ Invalid username. Must be at least 2 characters (letters, numbers, hyphens, underscores). Try again or /cancel:"
+        )
+        return WAITING_NEW_USERNAME
+
+    res = navidrome_client.update_user(target_user, new_username=new_username)
+    if res.get("ok"):
+        reply_text = (
+            f"✅ *Username Updated Successfully!*\n\n"
+            f"• *Previous Username:* `{target_user}`\n"
+            f"• *New Username:* `{new_username}`\n\n"
+            "_The account name has been updated in Navidrome immediately._"
+        )
+        keyboard = [
+            [InlineKeyboardButton("👤 View User", callback_data=f"u_manage:{new_username}")],
+            [InlineKeyboardButton("👥 All Users", callback_data="u_list")],
+        ]
+    else:
+        err = res.get("message", "Unknown error")
+        reply_text = f"❌ *Failed to update username:*\n`{err}`"
+        keyboard = [[InlineKeyboardButton("⬅️ Back to Users", callback_data="u_list")]]
+
+    await update.message.reply_markdown(reply_text, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
 
-# Conversation handler definition
-add_user_conversation = ConversationHandler(
+# --- EDIT PASSWORD ---
+async def start_edit_password_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Presents options to auto-generate or type a custom password."""
+    query = update.callback_query
+    if not query or not query.from_user or not is_authorized(query.from_user.id):
+        if query:
+            await query.answer("⛔ Unauthorized", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+
+    data = query.data or ""
+    username = data.split(":", 1)[1] if ":" in data else ""
+    if not username:
+        return ConversationHandler.END
+
+    context.user_data["edit_target_user"] = username
+
+    text = (
+        f"🔑 *Change Password for:* `{username}`\n\n"
+        "• *Type your custom password* directly in chat (minimum 4 characters)\n"
+        "• Or tap *🎲 Auto-Generate* below for an instant secure password.\n\n"
+        "Send `/cancel` to abort."
+    )
+    keyboard = [
+        [InlineKeyboardButton("🎲 Auto-Generate Password", callback_data=f"u_pass_auto:{username}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="u_cancel_conv")],
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    return WAITING_NEW_PASSWORD
+
+
+async def auto_generate_password_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Instantly generates and assigns a secure random password."""
+    query = update.callback_query
+    if not query or not query.from_user or not is_authorized(query.from_user.id):
+        if query:
+            await query.answer("⛔ Unauthorized", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+
+    data = query.data or ""
+    username = data.split(":", 1)[1] if ":" in data else ""
+    if not username:
+        return ConversationHandler.END
+
+    new_password = secrets.token_urlsafe(10)
+    res = navidrome_client.update_user(username=username, password=new_password)
+
+    if res.get("ok"):
+        text = (
+            f"🔑 *Password Updated Successfully!*\n\n"
+            f"• *Username:* `{username}`\n"
+            f"• *New Password:* `{new_password}`\n\n"
+            "⚠️ _Please copy and share this password with the user immediately._"
+        )
+    else:
+        err = res.get("message", "Unknown error")
+        text = f"❌ *Failed to update password for `{username}`:*\n`{err}`"
+
+    keyboard = [
+        [InlineKeyboardButton("👤 View User", callback_data=f"u_manage:{username}")],
+        [InlineKeyboardButton("👥 All Users", callback_data="u_list")],
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    return ConversationHandler.END
+
+
+async def process_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Applies a custom typed password to the Navidrome account."""
+    user = update.effective_user
+    if not user or not is_authorized(user.id) or not update.message or not update.message.text:
+        return ConversationHandler.END
+
+    target_user = context.user_data.get("edit_target_user")
+    if not target_user:
+        await update.message.reply_text("⚠️ Session expired. Please start over with `/users`.")
+        return ConversationHandler.END
+
+    new_password = update.message.text.strip()
+    if len(new_password) < 4:
+        await update.message.reply_text("⚠️ Password must be at least 4 characters. Try again or /cancel:")
+        return WAITING_NEW_PASSWORD
+
+    res = navidrome_client.update_user(username=target_user, password=new_password)
+    if res.get("ok"):
+        reply_text = (
+            f"🔑 *Password Updated Successfully!*\n\n"
+            f"• *Username:* `{target_user}`\n"
+            f"• *New Password:* `{new_password}`\n\n"
+            "✨ _The new password is now active in Navidrome immediately._"
+        )
+        keyboard = [
+            [InlineKeyboardButton("👤 View User", callback_data=f"u_manage:{target_user}")],
+            [InlineKeyboardButton("👥 All Users", callback_data="u_list")],
+        ]
+    else:
+        err = res.get("message", "Unknown error")
+        reply_text = f"❌ *Failed to update password:*\n`{err}`"
+        keyboard = [[InlineKeyboardButton("⬅️ Back to Users", callback_data="u_list")]]
+
+    await update.message.reply_markdown(reply_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+
+async def cancel_user_conv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancels any ongoing user edit/add conversation."""
+    target_user = context.user_data.get("edit_target_user")
+    keyboard = []
+    if target_user:
+        keyboard.append([InlineKeyboardButton("⬅️ Back to User", callback_data=f"u_manage:{target_user}")])
+    else:
+        keyboard.append([InlineKeyboardButton("👥 All Users", callback_data="u_list")])
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            "❌ Action cancelled.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    elif update.effective_message:
+        await update.effective_message.reply_text(
+            "❌ Action cancelled.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    return ConversationHandler.END
+
+
+# Unified Conversation handler for add/edit operations
+user_conversation = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(start_add_user_callback, pattern=r"^u_add$"),
         CommandHandler("adduser", add_user_command),
+        CallbackQueryHandler(start_edit_username_callback, pattern=r"^u_edit_name:"),
+        CallbackQueryHandler(start_edit_password_callback, pattern=r"^u_edit_pass:"),
     ],
     states={
-        WAITING_USER_INPUT: [
+        WAITING_ADD_USER_INPUT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, process_add_user_input),
+        ],
+        WAITING_NEW_USERNAME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, process_new_username),
+        ],
+        WAITING_NEW_PASSWORD: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, process_new_password),
         ],
     },
     fallbacks=[
-        CommandHandler("cancel", cancel_add_user),
-        CallbackQueryHandler(cancel_add_user_callback, pattern=r"^u_cancel_add$"),
+        CommandHandler("cancel", cancel_user_conv),
+        CallbackQueryHandler(cancel_user_conv, pattern=r"^u_cancel_conv$"),
+        CallbackQueryHandler(auto_generate_password_callback, pattern=r"^u_pass_auto:"),
     ],
     allow_reentry=True,
     per_message=False,
@@ -401,11 +598,11 @@ add_user_conversation = ConversationHandler(
 
 # Exported router for main.py registration
 router = [
-    add_user_conversation,
+    user_conversation,
     CommandHandler("users", users_command_handler),
     CallbackQueryHandler(user_list_callback, pattern=r"^(u_list|u_refresh)$"),
     CallbackQueryHandler(user_manage_callback, pattern=r"^u_manage:"),
-    CallbackQueryHandler(user_reset_password_callback, pattern=r"^u_reset:"),
+    CallbackQueryHandler(user_edit_menu_callback, pattern=r"^u_edit_menu:"),
     CallbackQueryHandler(user_delete_prompt_callback, pattern=r"^u_del:"),
     CallbackQueryHandler(user_delete_confirm_callback, pattern=r"^u_del_confirm:"),
     CallbackQueryHandler(user_close_callback, pattern=r"^u_close$"),

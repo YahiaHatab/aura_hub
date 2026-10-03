@@ -131,7 +131,7 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 
 ### 4.6 User Account Administration (`handlers/users.py`)
 - **`/users` Command:** Displays all registered Subsonic accounts with roles (`[👑 Admin]`, `[🎧 Stream]`, `[📥 Download]`).
-- **Interactive Actions:** Per-user card with buttons to reset passwords (`secrets.token_urlsafe(10)`) or trigger deletion with two-step confirmation safeguards.
+- **Interactive Actions:** Per-user card with buttons to edit user details (rename username or update password with custom text / auto-generation) or trigger deletion with two-step confirmation safeguards.
 - **Add User Flow:** Interactive `ConversationHandler` triggered via `/adduser` or inline button.
 - **Security:** Strict admin enforcement via `@auth_required` decorator and built-in protection against deleting the primary configured server admin.
 
