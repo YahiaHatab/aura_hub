@@ -9,7 +9,7 @@ from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder
 
 import config
-from handlers import common, download, library, navidrome, request, system, users
+from handlers import common, download, library, navidrome, nowplaying, request, system, users
 
 # Configure application logging
 logging.basicConfig(
@@ -22,6 +22,7 @@ logger = logging.getLogger("aura_hub")
 async def post_init(application: Application) -> None:
     """Configures bot menu commands visible in Telegram clients."""
     commands = [
+        BotCommand("nowplaying", "Live playback sessions on Navidrome"),
         BotCommand("request", "Request music for ingestion"),
         BotCommand("search", "Search tracks on YouTube with interactive buttons"),
         BotCommand("download", "Download Spotify/YouTube URL (Admin)"),
@@ -55,6 +56,7 @@ def build_application() -> Application:
         download.router,
         library.router,
         navidrome.router,
+        nowplaying.router,
         request.router,
         system.router,
         users.router,

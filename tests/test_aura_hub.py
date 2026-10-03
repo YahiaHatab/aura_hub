@@ -243,6 +243,73 @@ class TestAuthAndRequestQueue(unittest.TestCase):
         self.assertEqual(_safe_md("Standard Title"), "Standard Title")
 
 
+class TestNowPlaying(unittest.TestCase):
+    def setUp(self):
+        self.client = NavidromeClient("http://localhost:4533", "admin", "secret")
+
+    def test_get_now_playing_idle(self):
+        with patch.object(self.client, "_request", return_value={"ok": True, "data": {"nowPlaying": {}}}):
+            res = self.client.get_now_playing()
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["entries"], [])
+            self.assertEqual(res["count"], 0)
+
+    def test_get_now_playing_active_streams(self):
+        sample_entry = {
+            "id": "123",
+            "title": "Hotel California",
+            "artist": "Eagles",
+            "album": "Hotel California",
+            "username": "yahia",
+            "playerName": "Symfonium",
+            "bitRate": 320,
+            "suffix": "flac",
+            "minutesAgo": 2,
+            "duration": 390,
+        }
+        with patch.object(self.client, "_request", return_value={"ok": True, "data": {"nowPlaying": {"entry": [sample_entry]}}}):
+            res = self.client.get_now_playing()
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["count"], 1)
+            entry = res["entries"][0]
+            self.assertEqual(entry["username"], "yahia")
+            self.assertEqual(entry["player"], "Symfonium")
+            self.assertEqual(entry["title"], "Hotel California")
+            self.assertEqual(entry["artist"], "Eagles")
+            self.assertEqual(entry["album"], "Hotel California")
+            self.assertEqual(entry["bitrate"], 320)
+            self.assertEqual(entry["format"], "FLAC")
+            self.assertEqual(entry["minutes_ago"], 2)
+
+    def test_build_now_playing_card(self):
+        from handlers.nowplaying import build_now_playing_response
+
+        # Idle state
+        idle_card = build_now_playing_response({"ok": True, "entries": []})
+        self.assertIn("Server is currently idle", idle_card)
+
+        # Active state
+        active_card = build_now_playing_response({
+            "ok": True,
+            "entries": [{
+                "username": "yahia",
+                "player": "Symfonium",
+                "title": "Hotel California",
+                "artist": "Eagles",
+                "album": "Hotel California",
+                "bitrate": 320,
+                "format": "FLAC",
+                "minutes_ago": 0,
+                "duration": 390,
+            }],
+        })
+        self.assertIn("yahia", active_card)
+        self.assertIn("Symfonium", active_card)
+        self.assertIn("Hotel California", active_card)
+        self.assertIn("Eagles", active_card)
+        self.assertIn("320 kbps • FLAC", active_card)
+
+
 if __name__ == "__main__":
     unittest.main()
 

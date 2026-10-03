@@ -219,6 +219,74 @@ class NavidromeClient:
             }
         return res
 
+    def get_now_playing(self) -> Dict[str, Any]:
+        """Retrieves active playback sessions across the Navidrome instance (/rest/getNowPlaying).
+
+        Returns:
+            Dict containing:
+                ok (bool): True if successful.
+                entries (list): List of parsed active playback session dicts.
+                count (int): Number of active streams.
+                message (str, optional): Error message if ok is False.
+        """
+        res = self._request("getNowPlaying")
+        if not res.get("ok"):
+            return {
+                "ok": False,
+                "entries": [],
+                "count": 0,
+                "message": res.get("message", "Failed to retrieve now playing data."),
+            }
+
+        sub_resp = res.get("data", {})
+        now_playing = sub_resp.get("nowPlaying", {})
+        raw_entries = now_playing.get("entry", [])
+
+        if isinstance(raw_entries, dict):
+            entry_list = [raw_entries]
+        elif isinstance(raw_entries, list):
+            entry_list = raw_entries
+        else:
+            entry_list = []
+
+        parsed_entries = []
+        for entry in entry_list:
+            username = entry.get("username", "Unknown User")
+            title = entry.get("title", "Unknown Title")
+            artist = entry.get("artist", "Unknown Artist")
+            album = entry.get("album", "Unknown Album")
+            player = (
+                entry.get("playerName")
+                or entry.get("clientName")
+                or entry.get("player")
+                or "Unknown Client"
+            )
+            bitrate = entry.get("bitRate")
+            suffix = entry.get("suffix") or ""
+            minutes_ago = entry.get("minutesAgo", 0)
+            duration = entry.get("duration", 0)
+
+            parsed_entries.append(
+                {
+                    "username": username,
+                    "title": title,
+                    "artist": artist,
+                    "album": album,
+                    "player": player,
+                    "bitrate": bitrate,
+                    "format": suffix.upper() if suffix else "MP3",
+                    "minutes_ago": minutes_ago,
+                    "duration": duration,
+                    "entry_id": str(entry.get("id", "")),
+                }
+            )
+
+        return {
+            "ok": True,
+            "entries": parsed_entries,
+            "count": len(parsed_entries),
+        }
+
     def get_users(self) -> Dict[str, Any]:
         """Fetches list of all users from Navidrome (uses Native API first, Subsonic fallback)."""
         # 1. Try Navidrome native REST API (authoritative full user list)

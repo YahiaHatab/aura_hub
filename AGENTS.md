@@ -42,6 +42,7 @@ aura_hub/
 │   ├── download.py           # Direct URL auto-catcher, /download, /genius, /search (interactive buttons)
 │   ├── library.py            # /retag (interactive album browser), /delete (with confirmation dialog)
 │   ├── navidrome.py          # /rescan (triggers instant Navidrome Subsonic library scan), /scanstatus
+│   ├── nowplaying.py         # /nowplaying, /np active stream monitor with interactive refresh
 │   ├── request.py            # /request queue, admin approval/rejection cards, ingestion pipeline
 │   ├── system.py             # /storage, /disk metrics
 │   └── users.py              # /users, /adduser, password reset, and account deletion
@@ -150,6 +151,12 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 - **Non-Blocking Background Pipeline:** Upon approval, resolves query via YouTube search if needed, streams audio, matches tags via MusicBrainz/AcoustID, fetches synced `.lrc` lyrics via LRCLIB, initiates an instant Navidrome Subsonic scan, and delivers completion notifications (with cover art) to both the approving admin and the requester.
 - **Rejection Notification:** On rejection, marks the request as rejected, updates admin cards across chats, and notifies the requester.
 
+### 4.9 Real-Time Playback Monitor (`handlers/nowplaying.py`)
+- **Subsonic `getNowPlaying` Polling:** Calls `/rest/getNowPlaying` to extract active sessions across users and players.
+- **Rich Stream Metadata:** Displays listener username, player/client name (Symfonium, web, desktop), track title, artist, album, stream bitrate, audio format, and elapsed minutes.
+- **Dynamic In-Place Refresh:** Attached `[🔄 Refresh]` inline button re-polls the Navidrome Subsonic endpoint and updates the Telegram card in place without cluttering chat history.
+- **Idle Server State:** When no active sessions are detected, renders a clean status card indicating an idle server.
+
 ---
 
 ## 5. Telegram Bot Command Reference
@@ -159,6 +166,7 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 | `/start` | `handlers/common.py` | All Users | Welcome card and feature overview |
 | `/help` | `handlers/common.py` | All Users | Syntax guide and examples |
 | `/status` | `handlers/common.py` | All Users | Health check for Bot, external binaries, and Navidrome ping |
+| `/nowplaying`, `/np` | `handlers/nowplaying.py` | All Users | Real-time active playback session monitor with in-place refresh |
 | `/request <link or query>` | `handlers/request.py` | All Users | Queue a track, album, or URL for admin review |
 | `/search <query>` | `handlers/download.py` | All Users | Interactive YouTube search (downloads for admins, queues for users) |
 | `/download <url>` | `handlers/download.py` | Admins | Direct download and tagging (routes users to `/request`) |
