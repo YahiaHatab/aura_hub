@@ -36,6 +36,9 @@ aura_hub/
 │   ├── downloader.py         # yt-dlp & spotdl execution pipelines with dynamic progress updates
 │   ├── navidrome.py          # Subsonic/Navidrome REST client (/rest/startScan, /rest/ping, etc.)
 │   ├── system.py             # Storage metrics, tool availability diagnostics, safe folder deletion
+│   ├── library_browser.py    # Visual library scanning, safe cover art serving, and metadata health badges
+│   ├── requests.py           # Persistent JSON storage and execution engine for music ingestion requests
+│   ├── tasks.py              # In-memory background task manager for tracking active downloads
 │   └── web.py                # FastAPI WebApp backend with HMAC-SHA256 signature verification
 ├── static/
 │   └── index.html            # Telegram Mini App responsive single-page dashboard
@@ -167,14 +170,25 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 - **HMAC-SHA256 Cryptographic Auth:** Validates `Telegram.WebApp.initData` sent in `Authorization` headers using the secret key derived from `TELEGRAM_BOT_TOKEN`. Strictly restricts API access to authenticated `ADMIN_USER_IDS`.
 - **REST Endpoints:**
   - `GET /`, `GET /webapp`, `GET /hub`, `GET /hub/webapp`: Serves the responsive single-page application dashboard.
-  - `GET /api/users`, `GET /hub/api/users`: Fetches Navidrome user list and roles.
-  - `POST /api/users/create`, `POST /hub/api/users/create`: Creates a new Navidrome account.
-  - `POST /api/users/delete`, `POST /hub/api/users/delete`: Deletes a Navidrome account (with protection against deleting the primary admin).
-  - `POST /api/users/reset-password`, `POST /hub/api/users/reset-password`: Resets a user's password to a secure random string.
+  - `GET /api/me`, `GET /hub/api/me`: Returns user profile and administrative role information (`is_admin`).
   - `GET /api/nowplaying`, `GET /hub/api/nowplaying`: Real-time streaming sessions (`{"ok": True, "streams": [...]}`).
-  - `POST /api/rescan`, `POST /hub/api/rescan`: Triggers immediate Navidrome library scan.
-  - `GET /api/system`, `GET /hub/api/system`: Storage metrics, indexed MP3/LRC counts, and tool diagnostics.
-- **Frontend Dashboard:** Built with vanilla HTML/CSS/JS with Google Fonts (Outfit & Inter), Telegram theme CSS variables, responsive tabs, modals, and `Telegram.WebApp.HapticFeedback`. Uses dynamic subpath resolution (`getApiUrl`) and content-type checking before JSON parsing to prevent non-JSON parse errors.
+  - `POST /api/download`, `POST /hub/api/download`: Triggers direct audio ingestion pipeline with live background task registration (Admin only).
+  - `GET /api/tasks`, `GET /hub/api/tasks`: Active and recent background download tasks and progress percentage (Admin only).
+  - `POST /api/requests/submit`, `POST /hub/api/requests/submit`: Queues a new music request from an authorized user or admin.
+  - `GET /api/requests`, `GET /hub/api/requests`: Fetches music requests (all requests for admins, submitted requests for regular users).
+  - `POST /api/requests/action`, `POST /hub/api/requests/action`: Admin action (`approve` or `reject`) on a request with Telegram requester notification.
+  - `POST /api/requests/clear`, `POST /hub/api/requests/clear`: Admin action to clear past resolved/completed/rejected requests while preserving pending items.
+  - `GET /api/library`, `GET /hub/api/library`: Scans music library and returns indexed album folders with cover presence and lyrics sync status.
+  - `GET /api/cover`, `GET /hub/api/cover`: Safely serves album cover artwork (`?path=...`) with case-insensitive file matching, embedded APIC/picture extraction fallback, automatic loose `cover.jpg` caching, and SVG placeholder fallback.
+  - `POST /api/library/refetch-lyrics`, `POST /hub/api/library/refetch-lyrics`: Admin action to re-fetch and synchronize lyrics for an album folder.
+  - `POST /api/library/delete`, `POST /hub/api/library/delete`: Admin action to safely delete an album directory.
+  - `GET /api/users`, `GET /hub/api/users`: Fetches Navidrome user list and roles (Admin only).
+  - `POST /api/users/create`, `POST /hub/api/users/create`: Creates a new Navidrome account (Admin only).
+  - `POST /api/users/delete`, `POST /hub/api/users/delete`: Deletes a Navidrome account (Admin only).
+  - `POST /api/users/reset-password`, `POST /hub/api/users/reset-password`: Resets a user's password to a secure random string (Admin only).
+  - `POST /api/rescan`, `POST /hub/api/rescan`: Triggers immediate Navidrome library scan (Admin only).
+  - `GET /api/system`, `GET /hub/api/system`: Storage metrics, indexed MP3/LRC counts, and tool diagnostics (Admin only).
+- **Frontend Dashboard:** Built with vanilla HTML/CSS/JS with Google Fonts (Outfit & Inter), Telegram theme CSS variables, responsive tabs, modals, and `Telegram.WebApp.HapticFeedback`. Uses dynamic subpath resolution (`getApiUrl`) and content-type checking before JSON parsing to prevent non-JSON parse errors. Features role-aware UI navigation (Listeners see Streams, Requests, Library; Admins see Ingest, Requests, Library, Users, Server), Ingest stepper with live progress polling, enriched task cards with cover thumbnails and metadata lines, Requests queue drawer with clear history action, Now Playing stream cards with 64x64px artwork and animated equalizer bars, and a mobile-optimized bottom navigation bar with horizontal scrolling and compact layout for narrow screens (`< 420px`).
 - **Bot Integration:** Configures the Telegram chat menu button (`MenuButtonWebApp`) pointing to `WEBAPP_EXTERNAL_URL`, with `/hub` command fallback.
 
 ---

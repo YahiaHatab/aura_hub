@@ -18,3 +18,8 @@ Thumbs.db
 # Test artifacts
 .coverage
 htmlcov/
+
+# Local database / runtime files
+data/requests.json
+data/*.tmp
+

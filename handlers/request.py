@@ -24,6 +24,7 @@ import config
 from handlers.common import admin_required, auth_required, is_admin
 from services.downloader import executor, run_pipeline, run_youtube_search
 from services.navidrome import navidrome_client
+from services.requests import create_request as persist_request, update_request_status as persist_status
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,10 @@ async def submit_request(
         "admin_messages": [],
     }
     pending_requests[req_id] = req_data
+    try:
+        persist_request(user.id, username_part, target, req_id=req_id)
+    except Exception as e:
+        logger.warning(f"Failed to persist request {req_id}: {e}")
 
     # Send receipt confirmation to the requester
     receipt_text = (
@@ -184,6 +189,7 @@ async def approve_callback_handler(update: Update, context: ContextTypes.DEFAULT
     admin_name = user.first_name or f"Admin {user.id}"
     req["status"] = "processing"
     req["approved_by"] = admin_name
+    persist_status(req_id, "DOWNLOADING", admin_name=admin_name)
 
     # Update approving admin message
     await query.edit_message_text(
@@ -268,6 +274,7 @@ async def approve_callback_handler(update: Update, context: ContextTypes.DEFAULT
         )
 
         req["status"] = "completed"
+        persist_status(req_id, "COMPLETED", admin_name=admin_name)
         folder_path = Path(target_folder)
         mp3_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
         lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
@@ -353,6 +360,7 @@ async def approve_callback_handler(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.exception(f"Ingestion pipeline failed for request {req_id}")
         req["status"] = "failed"
+        persist_status(req_id, "FAILED", error=str(e))
         await query.edit_message_text(
             f"❌ *Ingestion Failed for Request {_safe_md(req_id)}:*\n`{_safe_md(str(e))}`",
             parse_mode="Markdown",
@@ -394,6 +402,7 @@ async def reject_callback_handler(update: Update, context: ContextTypes.DEFAULT_
 
     req["status"] = "rejected"
     admin_name = user.first_name or f"Admin {user.id}"
+    persist_status(req_id, "REJECTED", admin_name=admin_name)
 
     # Update admin card
     await query.edit_message_text(

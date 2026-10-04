@@ -1,7 +1,8 @@
 """FastAPI Web Server and Telegram Mini App backend for Aura Hub.
 
 Provides authenticated REST API endpoints and dashboard UI for managing
-Navidrome users, monitoring live playback, and triggering server actions.
+Navidrome users, monitoring live playback, queuing requests, direct downloading,
+and auditing library metadata.
 """
 
 import asyncio
@@ -17,13 +18,27 @@ from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import config
+from services.library_browser import (
+    DEFAULT_PLACEHOLDER_SVG,
+    get_library_albums,
+    refetch_album_lyrics,
+    remove_album,
+    resolve_album_cover,
+)
 from services.navidrome import navidrome_client
+from services.requests import (
+    clear_completed_requests,
+    create_request,
+    get_requests_for_user,
+    handle_request_action,
+)
 from services.system import get_album_folders, get_disk_metrics, get_system_diagnostic_summary
+from services.tasks import get_all_tasks, start_download_task
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +49,7 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(
     title="Aura Hub Dashboard",
     description="Telegram Mini App and Management API for Aura Hub & Navidrome",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 # Enable CORS for Telegram WebApp environment and reverse proxy
@@ -116,11 +131,11 @@ def verify_telegram_init_data(
     return True, user_data, ""
 
 
-async def verify_admin_user(
+async def get_current_user(
     authorization: Optional[str] = Header(None),
     x_telegram_init_data: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
-    """Dependency that ensures requests are signed by an authorized Telegram administrator."""
+    """Authenticates the incoming request using Telegram initData from Bearer or custom header."""
     raw_token = ""
     if authorization:
         if authorization.startswith("Bearer "):
@@ -147,16 +162,41 @@ async def verify_admin_user(
         )
 
     user_id = user_data.get("id")
-    if not user_id or user_id not in config.ADMIN_USER_IDS:
+    user_data["is_admin"] = bool(user_id and user_id in config.ADMIN_USER_IDS)
+    user_data["is_allowed"] = bool(
+        user_id and (user_id in config.ADMIN_USER_IDS or user_id in config.ALLOWED_USER_IDS)
+    )
+    return user_data
+
+
+async def verify_authorized_user(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Ensures the requester is in ALLOWED_USER_IDS or ADMIN_USER_IDS."""
+    if not current_user.get("is_allowed"):
         logger.warning(
-            f"Unauthorized WebApp access attempt by user {user_id} ({user_data.get('username')})"
+            f"Unauthorized WebApp access attempt by user {current_user.get('id')} ({current_user.get('username')})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: You are not authorized to access Aura Hub.",
+        )
+    return current_user
+
+
+async def verify_admin_user(
+    current_user: Dict[str, Any] = Depends(verify_authorized_user),
+) -> Dict[str, Any]:
+    """Ensures the requester has full administrative privileges (ADMIN_USER_IDS)."""
+    if not current_user.get("is_admin"):
+        logger.warning(
+            f"Non-admin WebApp access attempt by user {current_user.get('id')} ({current_user.get('username')})"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: Administrative privileges required to access Aura Hub WebApp.",
         )
-
-    return user_data
+    return current_user
 
 
 # ================= DATA MODELS =================
@@ -169,6 +209,27 @@ class CreateUserRequest(BaseModel):
 
 class UserActionRequest(BaseModel):
     username: str = Field(..., min_length=1)
+
+
+class DownloadRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+
+
+class SubmitRequestPayload(BaseModel):
+    query_or_url: str = Field(..., min_length=1)
+
+
+class RequestActionPayload(BaseModel):
+    request_id: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1)
+
+
+class FolderActionPayload(BaseModel):
+    folder: str = Field(..., min_length=1)
+
+
+class ClearRequestsPayload(BaseModel):
+    status: Optional[str] = "completed_only"
 
 
 # ================= STATIC & DASHBOARD ROUTES =================
@@ -198,6 +259,19 @@ if STATIC_DIR.is_dir():
 api_router = APIRouter()
 
 
+@api_router.get("/me")
+async def get_me_api(user: Dict[str, Any] = Depends(verify_authorized_user)):
+    """Returns current user's profile and administrative role information."""
+    return {
+        "ok": True,
+        "user_id": user.get("id"),
+        "username": user.get("username", ""),
+        "first_name": user.get("first_name", ""),
+        "is_admin": user.get("is_admin", False),
+    }
+
+
+# ----- USERS API -----
 @api_router.get("/users")
 async def get_users_api(admin_user: Dict[str, Any] = Depends(verify_admin_user)):
     """Fetches list of registered Navidrome users with roles and status."""
@@ -271,8 +345,9 @@ async def reset_password_api(
     }
 
 
+# ----- NOW PLAYING API -----
 @api_router.get("/nowplaying")
-async def get_now_playing_api(admin_user: Dict[str, Any] = Depends(verify_admin_user)):
+async def get_now_playing_api(user: Dict[str, Any] = Depends(verify_authorized_user)):
     """Returns active playback sessions on Navidrome."""
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, navidrome_client.get_now_playing)
@@ -285,6 +360,140 @@ async def get_now_playing_api(admin_user: Dict[str, Any] = Depends(verify_admin_
     }
 
 
+# ----- IN-APP DOWNLOADER & TASK POLLING API -----
+@api_router.post("/download")
+async def trigger_download_api(
+    payload: DownloadRequest,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Spawns direct ingestion pipeline and registers background task."""
+    admin_name = admin_user.get("first_name") or admin_user.get("username") or "Admin"
+    task = start_download_task(payload.url.strip(), started_by=admin_name)
+    return {"ok": True, "task": task}
+
+
+@api_router.get("/tasks")
+async def get_tasks_api(admin_user: Dict[str, Any] = Depends(verify_admin_user)):
+    """Returns active and recent background download tasks."""
+    tasks = get_all_tasks()
+    return {"ok": True, "tasks": tasks}
+
+
+# ----- REQUEST QUEUE API -----
+@api_router.post("/requests/submit")
+async def submit_request_api(
+    payload: SubmitRequestPayload,
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Queues a new music request from an authorized user or admin."""
+    user_id = user.get("id")
+    user_name = user.get("username") or user.get("first_name") or f"User {user_id}"
+    req = create_request(user_id=user_id, user_name=user_name, query_or_url=payload.query_or_url)
+    return {"ok": True, "request": req}
+
+
+@api_router.get("/requests")
+async def get_requests_api(user: Dict[str, Any] = Depends(verify_authorized_user)):
+    """Fetches music requests (all requests for admins, submitted requests for regular users)."""
+    reqs = get_requests_for_user(
+        user_id=user.get("id"),
+        is_admin=user.get("is_admin", False),
+    )
+    return {"ok": True, "requests": reqs}
+
+
+@api_router.post("/requests/action")
+async def action_request_api(
+    payload: RequestActionPayload,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Approve or reject a music request (Admin only)."""
+    ok, msg = handle_request_action(
+        req_id=payload.request_id.strip(),
+        action=payload.action.strip(),
+        admin_user=admin_user,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True, "message": msg}
+
+
+@api_router.post("/requests/clear")
+async def clear_requests_api(
+    payload: Optional[ClearRequestsPayload] = None,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Clears past resolved/completed/rejected requests while preserving pending/active ones."""
+    filter_mode = payload.status if payload and payload.status else "completed_only"
+    preserve_active = (filter_mode == "completed_only")
+    cleared_count = clear_completed_requests(preserve_active=preserve_active)
+    return {
+        "ok": True,
+        "cleared": cleared_count,
+        "message": f"Successfully cleared {cleared_count} past requests.",
+    }
+
+
+# ----- VISUAL LIBRARY BROWSER API -----
+@api_router.get("/library")
+async def get_library_api(user: Dict[str, Any] = Depends(verify_authorized_user)):
+    """Returns indexed album folders with cover presence and lyrics sync status."""
+    loop = asyncio.get_running_loop()
+    albums = await loop.run_in_executor(None, get_library_albums)
+    return {"ok": True, "albums": albums, "count": len(albums)}
+
+
+@api_router.get("/cover")
+async def get_cover_api(path: str):
+    """Safely serves album cover artwork with path traversal verification and fallback."""
+    loop = asyncio.get_running_loop()
+    try:
+        cover_path = await loop.run_in_executor(None, lambda: resolve_album_cover(path))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path traversal forbidden.")
+
+    if cover_path and cover_path.is_file():
+        media_type = "image/jpeg"
+        if cover_path.suffix.lower() == ".png":
+            media_type = "image/png"
+        elif cover_path.suffix.lower() == ".webp":
+            media_type = "image/webp"
+        return FileResponse(cover_path, media_type=media_type)
+
+    return Response(content=DEFAULT_PLACEHOLDER_SVG, media_type="image/svg+xml")
+
+
+@api_router.post("/library/refetch-lyrics")
+async def refetch_lyrics_api(
+    payload: FolderActionPayload,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Refetches and syncs lyrics for an album folder."""
+    loop = asyncio.get_running_loop()
+    try:
+        res = await loop.run_in_executor(None, lambda: refetch_album_lyrics(payload.folder))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid folder path.")
+
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("message", "Lyrics sync failed."))
+    return res
+
+
+@api_router.post("/library/delete")
+async def delete_album_api(
+    payload: FolderActionPayload,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Safely deletes an album folder from disk."""
+    loop = asyncio.get_running_loop()
+    ok, msg = await loop.run_in_executor(None, lambda: remove_album(payload.folder))
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True, "message": msg}
+
+
+# ----- SYSTEM & SCAN API -----
 @api_router.post("/rescan")
 async def trigger_rescan_api(admin_user: Dict[str, Any] = Depends(verify_admin_user)):
     """Triggers an instant Subsonic library scan on Navidrome."""
@@ -333,4 +542,3 @@ async def get_system_api(admin_user: Dict[str, Any] = Depends(verify_admin_user)
 # Mount API routes under both /api and /hub/api to support reverse proxy subpaths
 app.include_router(api_router, prefix="/api")
 app.include_router(api_router, prefix="/hub/api")
-
