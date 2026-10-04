@@ -68,3 +68,9 @@ NAVIDROME_PASS = os.environ.get("NAVIDROME_PASS", "")
 # ================= CLIENT CONSTANTS & HEADERS =================
 MB_HEADERS = {"User-Agent": "AuraMusicHub/1.0 (contact@aurahub.local)"}
 PAGE_SIZE = int(os.environ.get("PAGE_SIZE", "6"))
+
+# ================= TELEGRAM WEBAPP / MINI APP =================
+WEBAPP_HOST = os.environ.get("WEBAPP_HOST", "127.0.0.1")
+WEBAPP_PORT = int(os.environ.get("WEBAPP_PORT", "8000"))
+WEBAPP_EXTERNAL_URL = os.environ.get("WEBAPP_EXTERNAL_URL", "").rstrip("/")
+

@@ -5,7 +5,9 @@ and mounts modular routers from the handlers package.
 """
 
 import logging
-from telegram import BotCommand
+import threading
+import uvicorn
+from telegram import BotCommand, MenuButtonWebApp, WebAppInfo
 from telegram.ext import Application, ApplicationBuilder
 
 import config
@@ -20,8 +22,9 @@ logger = logging.getLogger("aura_hub")
 
 
 async def post_init(application: Application) -> None:
-    """Configures bot menu commands visible in Telegram clients."""
+    """Configures bot menu commands and WebApp chat menu button."""
     commands = [
+        BotCommand("hub", "Open Aura Hub WebApp dashboard"),
         BotCommand("nowplaying", "Live playback sessions on Navidrome"),
         BotCommand("request", "Request music for ingestion"),
         BotCommand("search", "Search tracks on YouTube with interactive buttons"),
@@ -38,6 +41,20 @@ async def post_init(application: Application) -> None:
         BotCommand("help", "Show help and syntax guide"),
     ]
     await application.bot.set_my_commands(commands)
+
+    # Set chat menu button to launch WebApp if external URL is provided
+    if config.WEBAPP_EXTERNAL_URL:
+        try:
+            await application.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="⚡ Aura Hub",
+                    web_app=WebAppInfo(url=config.WEBAPP_EXTERNAL_URL),
+                )
+            )
+            logger.info("Chat menu button set to WebApp: %s", config.WEBAPP_EXTERNAL_URL)
+        except Exception as e:
+            logger.warning("Could not set chat menu button: %s", e)
+
     logger.info("Bot commands successfully registered with Telegram API.")
 
 
@@ -70,11 +87,38 @@ def build_application() -> Application:
     return app
 
 
+def run_web_server() -> None:
+    """Runs the FastAPI WebApp server via uvicorn in a dedicated thread."""
+    try:
+        cfg = uvicorn.Config(
+            "services.web:app",
+            host=config.WEBAPP_HOST,
+            port=config.WEBAPP_PORT,
+            log_level="info",
+        )
+        server = uvicorn.Server(cfg)
+        server.run()
+    except Exception as e:
+        logger.error("Web server stopped with error: %s", e)
+
+
 def main() -> None:
-    """Starts the Aura Hub bot polling service."""
+    """Starts the Aura Hub bot polling service and background web server."""
     if not config.TELEGRAM_BOT_TOKEN or "YOUR_TOKEN" in config.TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN is not set or invalid in config.py.")
         return
+
+    # Start WebApp dashboard server in a daemon thread
+    if config.WEBAPP_PORT:
+        web_thread = threading.Thread(
+            target=run_web_server, daemon=True, name="AuraWebAppThread"
+        )
+        web_thread.start()
+        logger.info(
+            "Aura Hub WebApp dashboard running locally on http://%s:%s",
+            config.WEBAPP_HOST,
+            config.WEBAPP_PORT,
+        )
 
     logger.info("Starting Aura Hub Telegram Bot...")
     app = build_application()
@@ -83,3 +127,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

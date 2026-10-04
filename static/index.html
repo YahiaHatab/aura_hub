@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Aura Hub — Navidrome Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #090d16);
+      --secondary-bg: var(--tg-theme-secondary-bg-color, #131b2e);
+      --text: var(--tg-theme-text-color, #f8fafc);
+      --hint: var(--tg-theme-hint-color, #94a3b8);
+      --btn: var(--tg-theme-button-color, #6366f1);
+      --btn-text: var(--tg-theme-button-text-color, #ffffff);
+      --card-bg: rgba(26, 36, 61, 0.65);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-hover: rgba(35, 48, 80, 0.85);
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.25);
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --radius: 16px;
+      --radius-sm: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+      padding-bottom: 90px;
+      position: relative;
+    }
+
+    /* Ambient background gradient glow */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -120px;
+      right: -80px;
+      width: 320px;
+      height: 320px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.18) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      bottom: 80px;
+      left: -100px;
+      width: 340px;
+      height: 340px;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.12) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Header */
+    header {
+      position: sticky;
+      top: 0;
+      background: rgba(9, 13, 22, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--card-border);
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #6366f1 0%, #38bdf8 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+    }
+
+    .brand-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-subtitle {
+      font-size: 11px;
+      color: var(--hint);
+      font-weight: 500;
+    }
+
+    .server-status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 5px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #34d399;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      animation: pulse-dot 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.3); opacity: 0.7; }
+    }
+
+    /* Container */
+    main {
+      padding: 16px;
+      max-width: 600px;
+      margin: 0 auto;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Tab Contents */
+    .tab-content {
+      display: none;
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Cards */
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 18px;
+      margin-bottom: 14px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+      transition: transform 0.15s ease, border-color 0.15s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .section-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Live Stream Cards */
+    .stream-card {
+      position: relative;
+      overflow: hidden;
+      border-left: 3px solid #38bdf8;
+    }
+
+    .stream-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .listener-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.1);
+      padding: 4px 9px;
+      border-radius: 8px;
+    }
+
+    .client-badge {
+      font-size: 11px;
+      color: var(--hint);
+      background: rgba(255, 255, 255, 0.05);
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+
+    .stream-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 17px;
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 4px;
+      line-height: 1.3;
+    }
+
+    .stream-artist {
+      font-size: 13px;
+      color: #cbd5e1;
+      margin-bottom: 10px;
+    }
+
+    .stream-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 11px;
+      color: var(--hint);
+    }
+
+    .meta-tag {
+      background: rgba(255, 255, 255, 0.06);
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+
+    /* Idle Card */
+    .idle-card {
+      text-align: center;
+      padding: 36px 20px;
+    }
+
+    .idle-icon {
+      font-size: 44px;
+      margin-bottom: 12px;
+      opacity: 0.8;
+      animation: float 3s infinite ease-in-out;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+
+    .idle-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .idle-desc {
+      font-size: 13px;
+      color: var(--hint);
+      max-width: 280px;
+      margin: 0 auto;
+    }
+
+    /* User Row */
+    .user-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: var(--radius-sm);
+      margin-bottom: 8px;
+      transition: background 0.15s ease;
+    }
+
+    .user-item:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .user-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .user-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .badge-admin {
+      font-size: 10px;
+      background: rgba(245, 158, 11, 0.18);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-weight: 700;
+    }
+
+    .user-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Action Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.1s ease, filter 0.15s ease;
+    }
+
+    .btn:active {
+      transform: scale(0.97);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+    }
+
+    .btn-outline {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .btn-outline:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-danger-outline {
+      background: rgba(239, 68, 68, 0.08);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .btn-danger-outline:hover {
+      background: rgba(239, 68, 68, 0.15);
+    }
+
+    .btn-sm {
+      padding: 6px 10px;
+      font-size: 11px;
+    }
+
+    .btn-full {
+      width: 100%;
+      padding: 12px;
+      font-size: 14px;
+    }
+
+    /* System Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .stat-box {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--hint);
+      margin-bottom: 4px;
+    }
+
+    .stat-val {
+      font-family: 'Outfit', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    /* Progress bar */
+    .progress-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8 0%, #6366f1 100%);
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 100;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal-box {
+      background: var(--secondary-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      width: 100%;
+      max-width: 420px;
+      padding: 22px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .modal-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: var(--hint);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .form-group {
+      margin-bottom: 14px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 12px;
+      color: var(--hint);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-sm);
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .form-input:focus {
+      border-color: #6366f1;
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      margin-bottom: 18px;
+      cursor: pointer;
+    }
+
+    /* Toast Notification */
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 90%;
+      max-width: 380px;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: rgba(30, 41, 59, 0.95);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #fff;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: slideDown 0.3s ease, fadeOut 0.3s ease 2.7s forwards;
+      pointer-events: auto;
+    }
+
+    .toast.success { border-left: 4px solid var(--success); }
+    .toast.error { border-left: 4px solid var(--danger); }
+    .toast.warning { border-left: 4px solid var(--warning); }
+
+    @keyframes slideDown {
+      from { transform: translateY(-16px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    @keyframes fadeOut {
+      to { opacity: 0; transform: translateY(-8px); }
+    }
+
+    /* Bottom Navigation Bar */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-top: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-around;
+      padding: 10px 14px 14px;
+      z-index: 50;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .nav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      background: transparent;
+      border: none;
+      color: var(--hint);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 6px 14px;
+      border-radius: 12px;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+
+    .nav-item.active {
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.1);
+    }
+
+    .nav-icon {
+      font-size: 18px;
+    }
+
+    /* Loading Spinner */
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 20px auto;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Unauthorized Screen */
+    .auth-banner {
+      display: none;
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    .auth-banner.show {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div>
+        <div class="brand-title">Aura Hub</div>
+        <div class="brand-subtitle">Navidrome Master Dashboard</div>
+      </div>
+    </div>
+    <div class="server-status-pill" id="serverStatusPill">
+      <span class="status-dot"></span>
+      <span id="serverStatusText">Online</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Auth Error Screen (Hidden by default) -->
+    <div class="auth-banner" id="authBanner">
+      <div class="card idle-card">
+        <div class="idle-icon">🔒</div>
+        <div class="idle-title">Access Restricted</div>
+        <div class="idle-desc">This dashboard requires Telegram Administrator authentication via Aura Hub Bot.</div>
+      </div>
+    </div>
+
+    <!-- TAB 1: NOW PLAYING -->
+    <div class="tab-content active" id="tabNowPlaying">
+      <div class="section-header">
+        <div class="section-title">
+          <span>📻</span> Active Playback Streams
+        </div>
+        <button class="btn btn-outline btn-sm" id="btnRefreshStreams">
+          <span>🔄</span> Refresh
+        </button>
+      </div>
+
+      <div id="streamsList">
+        <div class="spinner"></div>
+      </div>
+    </div>
+
+    <!-- TAB 2: USER MANAGEMENT -->
+    <div class="tab-content" id="tabUsers">
+      <div class="section-header">
+        <div class="section-title">
+          <span>👥</span> Navidrome Accounts
+        </div>
+        <button class="btn btn-primary btn-sm" id="btnOpenAddUser">
+          <span>➕</span> Add User
+        </button>
+      </div>
+
+      <div class="card">
+        <div id="usersList">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: SERVER ACTIONS -->
+    <div class="tab-content" id="tabServer">
+      <div class="section-header">
+        <div class="section-title">
+          <span>🎛️</span> Server Maintenance & Storage
+        </div>
+      </div>
+
+      <!-- Quick Actions Card -->
+      <div class="card">
+        <div class="section-title" style="margin-bottom: 12px; font-size: 14px;">
+          <span>⚡</span> Quick Commands
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <button class="btn btn-primary btn-full" id="btnTriggerRescan">
+            <span>🔄</span> Trigger Library Scan
+          </button>
+        </div>
+      </div>
+
+      <!-- Storage Metrics Card -->
+      <div class="card" id="systemMetricsCard">
+        <div class="section-title" style="margin-bottom: 12px; font-size: 14px;">
+          <span>💾</span> Storage & Media Library
+        </div>
+
+        <div class="stat-label">Disk Storage Usage (<span id="diskPercent">0%</span>)</div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="diskBarFill" style="width: 0%;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--hint); margin-bottom: 14px;">
+          <span id="diskUsed">Used: --</span>
+          <span id="diskFree">Free: --</span>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="stat-label">Indexed MP3s</div>
+            <div class="stat-val" id="statMp3">--</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Synced Lyrics (.lrc)</div>
+            <div class="stat-val" id="statLrc">--</div>
+          </div>
+        </div>
+
+        <div class="stats-grid" style="margin-bottom: 0;">
+          <div class="stat-box">
+            <div class="stat-label">Album Folders</div>
+            <div class="stat-val" id="statAlbums">--</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Subsonic API</div>
+            <div class="stat-val" style="font-size: 14px; color: #34d399;" id="statNavi">Connected</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Add User Modal -->
+  <div class="modal-overlay" id="addUserModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">Create Navidrome Account</div>
+        <button class="close-btn" id="btnCloseAddUser">&times;</button>
+      </div>
+
+      <form id="addUserForm">
+        <div class="form-group">
+          <label class="form-label" for="newUsername">Username</label>
+          <input type="text" id="newUsername" class="form-input" placeholder="e.g. bonga" required autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="newPassword">Password</label>
+          <input type="password" id="newPassword" class="form-input" placeholder="Enter secure password" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="newEmail">Email (Optional)</label>
+          <input type="email" id="newEmail" class="form-input" placeholder="user@example.com">
+        </div>
+
+        <label class="checkbox-group">
+          <input type="checkbox" id="newAdminRole">
+          <span>Grant Administrator Role</span>
+        </label>
+
+        <button type="submit" class="btn btn-primary btn-full" id="btnSubmitAddUser">
+          Create User
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Bottom Navigation Bar -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-tab="tabNowPlaying">
+      <span class="nav-icon">📻</span>
+      <span>Now Playing</span>
+    </button>
+    <button class="nav-item" data-tab="tabUsers">
+      <span class="nav-icon">👥</span>
+      <span>Users</span>
+    </button>
+    <button class="nav-item" data-tab="tabServer">
+      <span class="nav-icon">🎛️</span>
+      <span>Server</span>
+    </button>
+  </nav>
+
+  <script>
+    // Initialize Telegram WebApp
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    function haptic(type = 'impact', style = 'light') {
+      try {
+        if (!tg?.HapticFeedback) return;
+        if (type === 'impact') tg.HapticFeedback.impactOccurred(style);
+        else if (type === 'notification') tg.HapticFeedback.notificationOccurred(style);
+      } catch (e) {}
+    }
+
+    function showToast(msg, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      const icon = type === 'success' ? '✅' : (type === 'error' ? '❌' : 'ℹ️');
+      toast.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    function getAuthHeaders() {
+      const initData = tg?.initData || '';
+      return {
+        'Authorization': `Bearer ${initData}`,
+        'Content-Type': 'application/json'
+      };
+    }
+
+    function getApiUrl(endpoint) {
+      const clean = endpoint.replace(/^\/+/, '');
+      // Determine base path from current window location (strip /webapp, /index.html and trailing slashes)
+      let base = window.location.pathname
+        .replace(/\/(webapp|index\.html)\/?$/, '')
+        .replace(/\/+$/, '');
+      if (!base || base === '/') {
+        return `/${clean}`;
+      }
+      return `${base}/${clean}`;
+    }
+
+    async function apiRequest(endpoint, method = 'GET', body = null) {
+      const targetUrl = getApiUrl(endpoint);
+      const options = {
+        method,
+        headers: getAuthHeaders()
+      };
+      if (body) {
+        options.body = JSON.stringify(body);
+      }
+
+      let res;
+      try {
+        res = await fetch(targetUrl, options);
+      } catch (netErr) {
+        console.error(`Network error requesting ${targetUrl}:`, netErr);
+        throw new Error(`Network failure connecting to ${targetUrl}`);
+      }
+
+      if (res.status === 401 || res.status === 403) {
+        document.getElementById('authBanner').classList.add('show');
+        document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+        throw new Error('Authentication required');
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+
+      if (!res.ok) {
+        if (contentType.includes('application/json')) {
+          let errData;
+          try {
+            errData = await res.json();
+          } catch (e) {
+            errData = null;
+          }
+          const errMsg = errData?.detail || errData?.message || `Request failed with status ${res.status}`;
+          throw new Error(errMsg);
+        } else {
+          const text = await res.text();
+          console.error(`Non-JSON HTTP ${res.status} response from ${targetUrl}:`, text.substring(0, 200));
+          throw new Error(`Server returned HTTP ${res.status}`);
+        }
+      }
+
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        console.error(`Non-JSON response from ${targetUrl}:`, text.substring(0, 200));
+        throw new Error(`Unexpected non-JSON response from server (HTTP ${res.status})`);
+      }
+
+      return await res.json();
+    }
+
+    // Tab Navigation
+    document.querySelectorAll('.nav-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        haptic('impact', 'light');
+        document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+        btn.classList.add('active');
+        const targetTabId = btn.getAttribute('data-tab');
+        const targetTab = document.getElementById(targetTabId);
+        if (targetTab) targetTab.classList.add('active');
+
+        // Auto fetch data on tab switch
+        if (targetTabId === 'tabNowPlaying') fetchNowPlaying();
+        else if (targetTabId === 'tabUsers') fetchUsers();
+        else if (targetTabId === 'tabServer') fetchSystem();
+      });
+    });
+
+    // 1. Fetch Now Playing Streams
+    async function fetchNowPlaying() {
+      const container = document.getElementById('streamsList');
+      try {
+        const data = await apiRequest('api/nowplaying');
+        const streams = data.streams || data.entries || [];
+        if (!data.ok || streams.length === 0) {
+          container.innerHTML = `
+            <div class="card idle-card">
+              <div class="idle-icon">💤</div>
+              <div class="idle-title">Server is Idle</div>
+              <div class="idle-desc">No active playback sessions detected on Navidrome.</div>
+            </div>
+          `;
+          return;
+        }
+
+        let html = '';
+        streams.forEach(e => {
+          const bitrateVal = e.bitRate || e.bitrate;
+          const bitrate = bitrateVal ? `${bitrateVal} kbps` : 'Direct';
+          const minutesAgo = e.minutesAgo !== undefined ? e.minutesAgo : (e.minutes_ago || 0);
+          const elapsed = minutesAgo === 0 ? 'Active now (< 1m)' : `${minutesAgo}m ago`;
+          const duration = e.duration > 0 ? ` [${Math.floor(e.duration/60)}:${(e.duration%60).toString().padStart(2,'0')}]` : '';
+          const player = e.player || e.playerName || 'Unknown Client';
+          const fmt = e.format || (e.suffix ? e.suffix.toUpperCase() : 'MP3');
+
+          html += `
+            <div class="card stream-card">
+              <div class="stream-header">
+                <span class="listener-badge">🎧 ${e.username}</span>
+                <span class="client-badge">${player}</span>
+              </div>
+              <div class="stream-title">${e.title}${duration}</div>
+              <div class="stream-artist">👤 ${e.artist} — 💿 <i>${e.album}</i></div>
+              <div class="stream-meta">
+                <span class="meta-tag">📊 ${bitrate} • ${fmt}</span>
+                <span class="meta-tag">⏱️ ${elapsed}</span>
+              </div>
+            </div>
+          `;
+        });
+        container.innerHTML = html;
+      } catch (err) {
+        if (err.message !== 'Authentication required') {
+          container.innerHTML = `<div class="card" style="color: #f87171;">Failed to load active streams: ${err.message}</div>`;
+        }
+      }
+    }
+
+    // 2. Fetch Users
+    async function fetchUsers() {
+      const container = document.getElementById('usersList');
+      try {
+        const data = await apiRequest('api/users');
+        if (!data.ok || !data.users || data.users.length === 0) {
+          container.innerHTML = '<div style="color: var(--hint); padding: 12px;">No accounts found.</div>';
+          return;
+        }
+
+        let html = '';
+        data.users.forEach(u => {
+          const initials = (u.username || 'U').substring(0, 2).toUpperCase();
+          const adminBadge = u.is_admin ? '<span class="badge-admin">👑 Admin</span>' : '';
+          html += `
+            <div class="user-item">
+              <div class="user-info">
+                <div class="user-avatar">${initials}</div>
+                <div>
+                  <div class="user-name">${u.username} ${adminBadge}</div>
+                  <div style="font-size: 11px; color: var(--hint);">${u.email || 'No email attached'}</div>
+                </div>
+              </div>
+              <div class="user-actions">
+                <button class="btn btn-outline btn-sm" onclick="resetUserPassword('${u.username}')">
+                  🔑 Reset
+                </button>
+                <button class="btn btn-danger-outline btn-sm" onclick="deleteUser('${u.username}')">
+                  🗑️
+                </button>
+              </div>
+            </div>
+          `;
+        });
+        container.innerHTML = html;
+      } catch (err) {
+        if (err.message !== 'Authentication required') {
+          container.innerHTML = `<div style="color: #f87171;">Failed to load users: ${err.message}</div>`;
+        }
+      }
+    }
+
+    // Reset Password Action
+    async function resetUserPassword(username) {
+      if (!confirm(`Reset password for "${username}" to a new secure random string?`)) return;
+      haptic('impact', 'medium');
+      try {
+        const res = await apiRequest('api/users/reset-password', 'POST', { username });
+        if (res.ok) {
+          haptic('notification', 'success');
+          alert(`✅ Password updated for ${username}:\n\nNew Password: ${res.password}\n\nPlease copy and share with the user.`);
+          showToast(`Password reset for ${username}`, 'success');
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    // Delete User Action
+    async function deleteUser(username) {
+      if (!confirm(`Are you sure you want to permanently delete account "${username}"?`)) return;
+      haptic('impact', 'heavy');
+      try {
+        const res = await apiRequest('api/users/delete', 'POST', { username });
+        if (res.ok) {
+          haptic('notification', 'success');
+          showToast(`Account "${username}" deleted`, 'success');
+          fetchUsers();
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    // 3. Fetch System & Storage Metrics
+    async function fetchSystem() {
+      try {
+        const data = await apiRequest('api/system');
+        if (data.ok) {
+          const d = data.disk || {};
+          document.getElementById('diskPercent').textContent = `${d.percent_used || 0}%`;
+          document.getElementById('diskBarFill').style.width = `${d.percent_used || 0}%`;
+          document.getElementById('diskUsed').textContent = `Used: ${d.used_human || '0 GB'}`;
+          document.getElementById('diskFree').textContent = `Free: ${d.free_human || '0 GB'}`;
+
+          document.getElementById('statMp3').textContent = data.mp3_count || 0;
+          document.getElementById('statLrc').textContent = data.lrc_count || 0;
+          document.getElementById('statAlbums').textContent = data.album_count || 0;
+          document.getElementById('statNavi').textContent = data.navidrome_connected ? 'Connected' : 'Offline';
+        }
+      } catch (err) {}
+    }
+
+    // Rescan Action
+    document.getElementById('btnTriggerRescan').addEventListener('click', async () => {
+      haptic('impact', 'medium');
+      const btn = document.getElementById('btnTriggerRescan');
+      btn.disabled = true;
+      btn.textContent = '⏳ Triggering scan...';
+
+      try {
+        const res = await apiRequest('api/rescan', 'POST');
+        if (res.ok) {
+          haptic('notification', 'success');
+          showToast('Navidrome library scan initiated!', 'success');
+        } else {
+          showToast(res.message || 'Rescan failed', 'error');
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>🔄</span> Trigger Library Scan';
+      }
+    });
+
+    // Refresh Now Playing button
+    document.getElementById('btnRefreshStreams').addEventListener('click', () => {
+      haptic('impact', 'light');
+      fetchNowPlaying();
+    });
+
+    // Modal logic
+    const modal = document.getElementById('addUserModal');
+    document.getElementById('btnOpenAddUser').addEventListener('click', () => {
+      haptic('impact', 'light');
+      modal.classList.add('open');
+      document.getElementById('newUsername').focus();
+    });
+    document.getElementById('btnCloseAddUser').addEventListener('click', () => {
+      modal.classList.remove('open');
+    });
+
+    // Form submit
+    document.getElementById('addUserForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      haptic('impact', 'medium');
+      const username = document.getElementById('newUsername').value.trim();
+      const password = document.getElementById('newPassword').value.trim();
+      const email = document.getElementById('newEmail').value.trim();
+      const admin_role = document.getElementById('newAdminRole').checked;
+
+      const submitBtn = document.getElementById('btnSubmitAddUser');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creating...';
+
+      try {
+        const res = await apiRequest('api/users/create', 'POST', {
+          username, password, email, admin_role
+        });
+        if (res.ok) {
+          haptic('notification', 'success');
+          showToast(`Account "${username}" created!`, 'success');
+          modal.classList.remove('open');
+          document.getElementById('addUserForm').reset();
+          fetchUsers();
+        } else {
+          showToast(res.message || 'Failed to create user', 'error');
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create User';
+      }
+    });
+
+    // Initial Load
+    fetchNowPlaying();
+  </script>
+</body>
+</html>
+

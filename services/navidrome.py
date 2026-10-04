@@ -226,14 +226,16 @@ class NavidromeClient:
             Dict containing:
                 ok (bool): True if successful.
                 entries (list): List of parsed active playback session dicts.
+                streams (list): Alias to entries list.
                 count (int): Number of active streams.
                 message (str, optional): Error message if ok is False.
         """
-        res = self._request("getNowPlaying")
+        res = self._request("getNowPlaying", {"f": "json"})
         if not res.get("ok"):
             return {
                 "ok": False,
                 "entries": [],
+                "streams": [],
                 "count": 0,
                 "message": res.get("message", "Failed to retrieve now playing data."),
             }
@@ -251,6 +253,8 @@ class NavidromeClient:
 
         parsed_entries = []
         for entry in entry_list:
+            if not isinstance(entry, dict):
+                continue
             username = entry.get("username", "Unknown User")
             title = entry.get("title", "Unknown Title")
             artist = entry.get("artist", "Unknown Artist")
@@ -273,9 +277,13 @@ class NavidromeClient:
                     "artist": artist,
                     "album": album,
                     "player": player,
+                    "playerName": player,
                     "bitrate": bitrate,
+                    "bitRate": bitrate,
                     "format": suffix.upper() if suffix else "MP3",
+                    "suffix": suffix,
                     "minutes_ago": minutes_ago,
+                    "minutesAgo": minutes_ago,
                     "duration": duration,
                     "entry_id": str(entry.get("id", "")),
                 }
@@ -284,6 +292,7 @@ class NavidromeClient:
         return {
             "ok": True,
             "entries": parsed_entries,
+            "streams": parsed_entries,
             "count": len(parsed_entries),
         }
 

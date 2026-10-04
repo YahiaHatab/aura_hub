@@ -35,10 +35,13 @@ aura_hub/
 │   ├── tagger.py             # Mutagen ID3 engine, duration/phonetic track alignment, loose cover.jpg writer
 │   ├── downloader.py         # yt-dlp & spotdl execution pipelines with dynamic progress updates
 │   ├── navidrome.py          # Subsonic/Navidrome REST client (/rest/startScan, /rest/ping, etc.)
-│   └── system.py             # Storage metrics, tool availability diagnostics, safe folder deletion
+│   ├── system.py             # Storage metrics, tool availability diagnostics, safe folder deletion
+│   └── web.py                # FastAPI WebApp backend with HMAC-SHA256 signature verification
+├── static/
+│   └── index.html            # Telegram Mini App responsive single-page dashboard
 ├── handlers/
 │   ├── __init__.py           # Package marker
-│   ├── common.py             # /start, /help, /status, user authentication checks
+│   ├── common.py             # /start, /help, /hub, /status, user authentication checks
 │   ├── download.py           # Direct URL auto-catcher, /download, /genius, /search (interactive buttons)
 │   ├── library.py            # /retag (interactive album browser), /delete (with confirmation dialog)
 │   ├── navidrome.py          # /rescan (triggers instant Navidrome Subsonic library scan), /scanstatus
@@ -48,7 +51,8 @@ aura_hub/
 │   └── users.py              # /users, /adduser, password reset, and account deletion
 └── tests/
     ├── test_aura_hub.py      # Unit tests for helpers, keyboards, system services, and Navidrome client
-    └── test_handlers.py      # Integration tests verifying router mounting and application building
+    ├── test_handlers.py      # Integration tests verifying router mounting and application building
+    └── test_webapp.py        # Tests for FastAPI endpoints, HMAC validation, and dashboard API
 ```
 
 ---
@@ -157,6 +161,22 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 - **Dynamic In-Place Refresh:** Attached `[🔄 Refresh]` inline button re-polls the Navidrome Subsonic endpoint and updates the Telegram card in place without cluttering chat history.
 - **Idle Server State:** When no active sessions are detected, renders a clean status card indicating an idle server.
 
+### 4.10 Telegram Mini App & Web Dashboard (`services/web.py` & `static/index.html`)
+- **Architecture:** Embedded FastAPI web server running via uvicorn in a dedicated background daemon thread, binding locally to `127.0.0.1:8000` behind a Caddy reverse proxy with DuckDNS.
+- **Subpath & Reverse Proxy Support:** Accommodates Caddy reverse proxy under `/hub*`. Dual-mounts API routes under both `/api` and `/hub/api`, and serves dashboard on `/`, `/webapp`, `/hub`, `/hub/`, and `/hub/webapp`.
+- **HMAC-SHA256 Cryptographic Auth:** Validates `Telegram.WebApp.initData` sent in `Authorization` headers using the secret key derived from `TELEGRAM_BOT_TOKEN`. Strictly restricts API access to authenticated `ADMIN_USER_IDS`.
+- **REST Endpoints:**
+  - `GET /`, `GET /webapp`, `GET /hub`, `GET /hub/webapp`: Serves the responsive single-page application dashboard.
+  - `GET /api/users`, `GET /hub/api/users`: Fetches Navidrome user list and roles.
+  - `POST /api/users/create`, `POST /hub/api/users/create`: Creates a new Navidrome account.
+  - `POST /api/users/delete`, `POST /hub/api/users/delete`: Deletes a Navidrome account (with protection against deleting the primary admin).
+  - `POST /api/users/reset-password`, `POST /hub/api/users/reset-password`: Resets a user's password to a secure random string.
+  - `GET /api/nowplaying`, `GET /hub/api/nowplaying`: Real-time streaming sessions (`{"ok": True, "streams": [...]}`).
+  - `POST /api/rescan`, `POST /hub/api/rescan`: Triggers immediate Navidrome library scan.
+  - `GET /api/system`, `GET /hub/api/system`: Storage metrics, indexed MP3/LRC counts, and tool diagnostics.
+- **Frontend Dashboard:** Built with vanilla HTML/CSS/JS with Google Fonts (Outfit & Inter), Telegram theme CSS variables, responsive tabs, modals, and `Telegram.WebApp.HapticFeedback`. Uses dynamic subpath resolution (`getApiUrl`) and content-type checking before JSON parsing to prevent non-JSON parse errors.
+- **Bot Integration:** Configures the Telegram chat menu button (`MenuButtonWebApp`) pointing to `WEBAPP_EXTERNAL_URL`, with `/hub` command fallback.
+
 ---
 
 ## 5. Telegram Bot Command Reference
@@ -165,6 +185,7 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 | :--- | :--- | :--- | :--- |
 | `/start` | `handlers/common.py` | All Users | Welcome card and feature overview |
 | `/help` | `handlers/common.py` | All Users | Syntax guide and examples |
+| `/hub` | `handlers/common.py` | All Users | Open the interactive Telegram Mini App dashboard |
 | `/status` | `handlers/common.py` | All Users | Health check for Bot, external binaries, and Navidrome ping |
 | `/nowplaying`, `/np` | `handlers/nowplaying.py` | All Users | Real-time active playback session monitor with in-place refresh |
 | `/request <link or query>` | `handlers/request.py` | All Users | Queue a track, album, or URL for admin review |
@@ -209,6 +230,9 @@ NAVIDROME_URL="http://localhost:4533"
 NAVIDROME_USER="admin"
 NAVIDROME_PASS="secret_password"
 PAGE_SIZE="6"
+WEBAPP_HOST="127.0.0.1"
+WEBAPP_PORT="8000"
+WEBAPP_EXTERNAL_URL="https://your-domain.duckdns.org"
 ```
 
 ---

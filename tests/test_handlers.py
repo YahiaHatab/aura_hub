@@ -45,6 +45,7 @@ class TestHandlersAndApplication(unittest.TestCase):
         expected_commands = {
             "start",
             "help",
+            "hub",
             "status",
             "download",
             "genius",

@@ -4,7 +4,7 @@ import functools
 import logging
 from typing import Callable
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import CommandHandler, ContextTypes
 
 import config
@@ -97,9 +97,41 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/requests` — view pending ingestion queue (Admins)\n\n"
         "*6. System & Storage:*\n"
         "`/storage` or `/disk` — view disk metrics and indexed files\n"
-        "`/status` — check bot, tool, and Navidrome health"
+        "`/status` — check bot, tool, and Navidrome health\n\n"
+        "*7. Web Dashboard (Mini App):*\n"
+        "`/hub` — open the interactive Telegram Mini App dashboard"
     )
     await update.effective_message.reply_markdown(help_text)
+
+
+@auth_required
+async def hub_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Provides direct access button to the Aura Hub Telegram Mini App."""
+    if not update.effective_message:
+        return
+
+    if not config.WEBAPP_EXTERNAL_URL:
+        await update.effective_message.reply_markdown(
+            "⚠️ *Mini App URL is not configured.*\n\n"
+            "Please configure `WEBAPP_EXTERNAL_URL` in your `.env` file (e.g. `https://your-domain.duckdns.org`)."
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "⚡ Open Aura Hub Dashboard",
+                    web_app=WebAppInfo(url=config.WEBAPP_EXTERNAL_URL),
+                )
+            ]
+        ]
+    )
+    await update.effective_message.reply_markdown(
+        "🚀 *Aura Hub Dashboard*\n\n"
+        "Tap the button below to launch the Telegram Mini App for live streams, user management, and server actions:",
+        reply_markup=keyboard,
+    )
 
 
 @auth_required
@@ -131,5 +163,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 router = [
     CommandHandler("start", start_handler),
     CommandHandler("help", help_handler),
+    CommandHandler("hub", hub_handler),
     CommandHandler("status", status_handler),
 ]
+

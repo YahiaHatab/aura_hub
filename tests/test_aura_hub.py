@@ -267,10 +267,12 @@ class TestNowPlaying(unittest.TestCase):
             "minutesAgo": 2,
             "duration": 390,
         }
-        with patch.object(self.client, "_request", return_value={"ok": True, "data": {"nowPlaying": {"entry": [sample_entry]}}}):
+        with patch.object(self.client, "_request", return_value={"ok": True, "data": {"nowPlaying": {"entry": [sample_entry]}}}) as mock_req:
             res = self.client.get_now_playing()
+            mock_req.assert_called_once_with("getNowPlaying", {"f": "json"})
             self.assertTrue(res["ok"])
             self.assertEqual(res["count"], 1)
+            self.assertEqual(res["streams"], res["entries"])
             entry = res["entries"][0]
             self.assertEqual(entry["username"], "yahia")
             self.assertEqual(entry["player"], "Symfonium")
@@ -278,8 +280,38 @@ class TestNowPlaying(unittest.TestCase):
             self.assertEqual(entry["artist"], "Eagles")
             self.assertEqual(entry["album"], "Hotel California")
             self.assertEqual(entry["bitrate"], 320)
+            self.assertEqual(entry["bitRate"], 320)
             self.assertEqual(entry["format"], "FLAC")
             self.assertEqual(entry["minutes_ago"], 2)
+            self.assertEqual(entry["minutesAgo"], 2)
+
+    def test_get_now_playing_single_dict_quirk(self):
+        """Subsonic sometimes serializes a single entry as a dict instead of a list."""
+        sample_entry = {
+            "id": "456",
+            "title": "Shape of You",
+            "artist": "Ed Sheeran",
+            "album": "Divide",
+            "username": "guest",
+            "clientName": "Navidrome Web",
+            "bitRate": 256,
+            "suffix": "mp3",
+            "minutesAgo": 0,
+            "duration": 233,
+        }
+        with patch.object(self.client, "_request", return_value={"ok": True, "data": {"nowPlaying": {"entry": sample_entry}}}):
+            res = self.client.get_now_playing()
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["count"], 1)
+            self.assertEqual(len(res["streams"]), 1)
+            entry = res["streams"][0]
+            self.assertEqual(entry["username"], "guest")
+            self.assertEqual(entry["player"], "Navidrome Web")
+            self.assertEqual(entry["title"], "Shape of You")
+            self.assertEqual(entry["artist"], "Ed Sheeran")
+            self.assertEqual(entry["album"], "Divide")
+            self.assertEqual(entry["bitRate"], 256)
+            self.assertEqual(entry["format"], "MP3")
 
     def test_build_now_playing_card(self):
         from handlers.nowplaying import build_now_playing_response
