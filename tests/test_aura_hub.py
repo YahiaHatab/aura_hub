@@ -537,6 +537,254 @@ class TestCanonicalArtistAndLibraryUnification(unittest.TestCase):
                 mock_opus_instance.save.assert_called()
 
 
+class TestQualitySettings(unittest.TestCase):
+    def test_parse_quality_flag(self):
+        from services.settings import parse_quality_flag
+
+        url = "https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT"
+
+        clean, flag = parse_quality_flag(f"{url} --flac")
+        self.assertEqual(clean, url)
+        self.assertEqual(flag, "flac")
+
+        clean, flag = parse_quality_flag(f"{url} --OPUS")
+        self.assertEqual(clean, url)
+        self.assertEqual(flag, "opus")
+
+        clean, flag = parse_quality_flag(f"{url} --mp3")
+        self.assertEqual(clean, url)
+        self.assertEqual(flag, "mp3")
+
+        clean, flag = parse_quality_flag(f"{url} --auto")
+        self.assertEqual(clean, url)
+        self.assertEqual(flag, "auto")
+
+        clean, flag = parse_quality_flag(f"{url} | Genius Album Match --flac")
+        self.assertEqual(clean, f"{url} | Genius Album Match")
+        self.assertEqual(flag, "flac")
+
+        clean, flag = parse_quality_flag(url)
+        self.assertEqual(clean, url)
+        self.assertIsNone(flag)
+
+    def test_quality_persistence(self):
+        from services.settings import (
+            get_quality_preference,
+            set_quality_preference,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            custom_settings_file = Path(tmp_dir) / "settings.json"
+            with patch("services.settings.SETTINGS_FILE", custom_settings_file), \
+                 patch("services.settings.DATA_DIR", Path(tmp_dir)):
+
+                self.assertEqual(get_quality_preference(), "auto")
+
+                # Set user preference without altering global default
+                set_quality_preference("opus", user_id=123, set_global=False)
+                self.assertEqual(get_quality_preference(123), "opus")
+                self.assertEqual(get_quality_preference(456), "auto")
+                self.assertEqual(get_quality_preference(), "auto")
+
+                # Set global default
+                set_quality_preference("mp3", set_global=True)
+                self.assertEqual(get_quality_preference(), "mp3")
+                self.assertEqual(get_quality_preference(456), "mp3")
+                # User 123 still has explicit override
+                self.assertEqual(get_quality_preference(123), "opus")
+
+                # Invalid quality should raise ValueError
+                with self.assertRaises(ValueError):
+                    set_quality_preference("wav")
+
+
+class TestFLACTaggingAndLyrics(unittest.TestCase):
+    def test_flac_album_tagging(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            album_dir = Path(tmp_dir) / "Amr Diab" / "Kol Hayaty"
+            album_dir.mkdir(parents=True)
+
+            flac_file = album_dir / "01 - Song.flac"
+            flac_file.write_bytes(b"dummy flac content")
+
+            fake_flac_tags = {}
+            mock_flac_instance = MagicMock()
+            mock_flac_instance.__setitem__ = lambda self, k, v: fake_flac_tags.__setitem__(k, v)
+            mock_flac_instance.__getitem__ = lambda self, k: fake_flac_tags.__getitem__(k)
+            mock_flac_instance.clear_pictures = MagicMock()
+            mock_flac_instance.add_picture = MagicMock()
+            mock_flac_instance.save = MagicMock()
+
+            mock_mb = {
+                "mbid": "test-mbid",
+                "title": "Kol Hayaty",
+                "artist": "Amr Diab",
+                "date": "2018",
+                "genre": "Pop",
+                "tracks": [{"position": 1, "title": "Song 1", "length": 200.0}],
+                "cover_bytes": b"fake_cover_bytes",
+            }
+
+            with patch("services.tagger.search_musicbrainz_release", return_value=mock_mb), \
+                 patch("services.tagger.FLAC", return_value=mock_flac_instance), \
+                 patch("services.tagger.search_genius_album", return_value=None):
+
+                res = tag_album_hybrid(album_dir, "Kol Hayaty", "Amr Diab")
+                self.assertEqual(res["artist"], "Amr Diab")
+                self.assertEqual(res["album"], "Kol Hayaty")
+
+                # Verify Vorbis comments set
+                self.assertEqual(fake_flac_tags.get("title"), ["Song 1"])
+                self.assertEqual(fake_flac_tags.get("artist"), ["Amr Diab"])
+                self.assertEqual(fake_flac_tags.get("album"), ["Kol Hayaty"])
+                self.assertEqual(fake_flac_tags.get("tracknumber"), ["1"])
+                self.assertEqual(fake_flac_tags.get("tracktotal"), ["1"])
+                self.assertEqual(fake_flac_tags.get("discnumber"), ["1"])
+                self.assertEqual(fake_flac_tags.get("disctotal"), ["1"])
+
+                # Verify Picture added and file saved
+                mock_flac_instance.add_picture.assert_called()
+                mock_flac_instance.save.assert_called()
+
+                # Verify loose cover.jpg created
+                self.assertTrue((album_dir / "cover.jpg").exists())
+
+    def test_lyrics_sync_detects_flac(self):
+        from services.lyrics import sync_all_lrc_in_folder
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            folder = Path(tmp_dir) / "Music"
+            folder.mkdir()
+            flac_file = folder / "01 - Artist - Title.flac"
+            flac_file.write_bytes(b"dummy flac")
+
+            mock_flac_inst = MagicMock()
+            mock_flac_inst.get = lambda k, default: ["Title"] if k == "title" else ["Artist"]
+
+            with patch("services.lyrics.fetch_and_save_lrc", return_value=True) as mock_fetch, \
+                 patch("mutagen.flac.FLAC", return_value=mock_flac_inst):
+                sync_all_lrc_in_folder(folder)
+                mock_fetch.assert_called_once()
+                args, _ = mock_fetch.call_args
+                self.assertEqual(args[0], "Title")
+                self.assertEqual(args[1], "Artist")
+                self.assertEqual(args[2], folder / "01 - Artist - Title.lrc")
+
+
+class TestDownloaderRouting(unittest.TestCase):
+    def test_youtube_routing_opus_default(self):
+        from services.downloader import run_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("config.BASE_DOWNLOAD_DIR", Path(tmp_dir)), \
+                 patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+                 patch("subprocess.run") as mock_subproc, \
+                 patch("services.downloader.tag_album_hybrid", return_value={"artist": "Amr Diab", "album": "Album"}), \
+                 patch("services.downloader.sync_all_lrc_in_folder", return_value=1):
+
+                mock_probe = MagicMock(returncode=0)
+                mock_probe.stdout = '{"title": "Track", "uploader": "Amr Diab", "entries": []}'
+                mock_dl = MagicMock(returncode=0)
+                mock_subproc.side_effect = [mock_probe, mock_dl]
+
+                run_pipeline("https://www.youtube.com/watch?v=123", quality="auto")
+
+                dl_cmd = mock_subproc.call_args_list[1][0][0]
+                self.assertIn("--audio-format", dl_cmd)
+                fmt_idx = dl_cmd.index("--audio-format")
+                self.assertEqual(dl_cmd[fmt_idx + 1], "opus")
+
+    def test_youtube_routing_mp3(self):
+        from services.downloader import run_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("config.BASE_DOWNLOAD_DIR", Path(tmp_dir)), \
+                 patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+                 patch("subprocess.run") as mock_subproc, \
+                 patch("services.downloader.tag_album_hybrid", return_value={"artist": "Amr Diab", "album": "Album"}), \
+                 patch("services.downloader.sync_all_lrc_in_folder", return_value=1):
+
+                mock_probe = MagicMock(returncode=0)
+                mock_probe.stdout = '{"title": "Track", "uploader": "Amr Diab", "entries": []}'
+                mock_dl = MagicMock(returncode=0)
+                mock_subproc.side_effect = [mock_probe, mock_dl]
+
+                run_pipeline("https://www.youtube.com/watch?v=123", quality="mp3")
+
+                dl_cmd = mock_subproc.call_args_list[1][0][0]
+                self.assertIn("--audio-format", dl_cmd)
+                fmt_idx = dl_cmd.index("--audio-format")
+                self.assertEqual(dl_cmd[fmt_idx + 1], "mp3")
+
+    def test_spotify_forced_flac_failure_raises(self):
+        from services.downloader import run_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("config.BASE_DOWNLOAD_DIR", Path(tmp_dir)):
+                # SpotiFLAC fails or produces no flac files
+                with self.assertRaises(RuntimeError) as ctx:
+                    run_pipeline("https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT", quality="flac")
+                self.assertIn("FLAC could not be resolved", str(ctx.exception))
+
+    def test_spotify_auto_falls_back_to_opus(self):
+        from services.downloader import run_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("config.BASE_DOWNLOAD_DIR", Path(tmp_dir)), \
+                 patch("services.downloader.find_spotdl_binary", return_value="/usr/bin/spotdl"), \
+                 patch("subprocess.run") as mock_subproc, \
+                 patch("services.downloader.tag_playlist_hybrid", return_value={"artist": "Various", "album": "Collection"}), \
+                 patch("services.downloader.sync_all_lrc_in_folder", return_value=1):
+
+                # Fake that spotdl created an opus file
+                def fake_spotdl_run(cmd, **kwargs):
+                    if "download" in cmd:
+                        # Create dummy opus file in target folder
+                        out_dir = Path(cmd[4]).parent
+                        (out_dir / "Artist - Track.opus").write_bytes(b"dummy opus")
+                    return MagicMock(returncode=0)
+
+                mock_subproc.side_effect = fake_spotdl_run
+
+                target_folder, meta = run_pipeline(
+                    "https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT", quality="auto"
+                )
+
+                # Verify spotdl was called with --format opus
+                call_args = mock_subproc.call_args[0][0]
+                self.assertIn("--format", call_args)
+                fmt_idx = call_args.index("--format")
+                self.assertEqual(call_args[fmt_idx + 1], "opus")
+
+    def test_spotify_explicit_mp3_skips_spotiflac(self):
+        from services.downloader import run_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("config.BASE_DOWNLOAD_DIR", Path(tmp_dir)), \
+                 patch("services.downloader.find_spotdl_binary", return_value="/usr/bin/spotdl"), \
+                 patch("subprocess.run") as mock_subproc, \
+                 patch("services.downloader.tag_playlist_hybrid", return_value={"artist": "Various", "album": "Collection"}), \
+                 patch("services.downloader.sync_all_lrc_in_folder", return_value=1):
+
+                def fake_spotdl_run(cmd, **kwargs):
+                    if "download" in cmd:
+                        out_dir = Path(cmd[4]).parent
+                        (out_dir / "Artist - Track.mp3").write_bytes(b"dummy mp3")
+                    return MagicMock(returncode=0)
+
+                mock_subproc.side_effect = fake_spotdl_run
+
+                target_folder, meta = run_pipeline(
+                    "https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT", quality="mp3"
+                )
+
+                call_args = mock_subproc.call_args[0][0]
+                self.assertIn("--format", call_args)
+                fmt_idx = call_args.index("--format")
+                self.assertEqual(call_args[fmt_idx + 1], "mp3")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

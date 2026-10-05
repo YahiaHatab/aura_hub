@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
-from mutagen.flac import Picture
+from mutagen.flac import FLAC, Picture
 from mutagen.id3 import (
     APIC,
     ID3,
@@ -43,7 +43,7 @@ from utils.helpers import extract_clean_artists, franco_to_arabic, get_clean_nam
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".opus"}
+SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".opus", ".flac"}
 
 
 def find_best_track_match(
@@ -60,22 +60,14 @@ def find_best_track_match(
     if not mb_tracks:
         return local_title, file_seq
 
-    # 1. Obtain local audio duration via mutagen
+    # 1. Obtain local audio duration via mutagen (universal across FLAC, Opus, MP3)
     local_duration = 0.0
     try:
-        path_obj = Path(local_file_path)
-        ext = path_obj.suffix.lower()
-        if ext == ".mp3":
-            audio_info = MP3(str(path_obj))
+        import mutagen
+
+        audio_info = mutagen.File(str(local_file_path))
+        if audio_info and getattr(audio_info, "info", None) and hasattr(audio_info.info, "length"):
             local_duration = float(audio_info.info.length)
-        elif ext == ".opus":
-            audio_info = OggOpus(str(path_obj))
-            local_duration = float(audio_info.info.length)
-        else:
-            import mutagen
-            audio_info = mutagen.File(str(path_obj))
-            if audio_info and audio_info.info:
-                local_duration = float(audio_info.info.length)
     except Exception as e:
         logger.debug(f"Could not read duration for {local_file_path}: {e}")
 
@@ -360,6 +352,50 @@ def tag_album_hybrid(
             except Exception as opus_err:
                 logger.warning(f"Failed to tag Opus track {file_path.name}: {opus_err}")
 
+        # Tag FLAC files with native Vorbis comments & Picture
+        elif f_ext == ".flac":
+            try:
+                audio = FLAC(str(file_path))
+                audio["title"] = [matched_title]
+
+                if effective_artist and effective_artist.lower() not in ("unknown artist", "various"):
+                    audio["artist"] = [effective_artist]
+                    audio["albumartist"] = [effective_artist]
+
+                audio["album"] = [resolved_album]
+                audio["tracknumber"] = [str(final_track_num)]
+                audio["tracktotal"] = [str(total_tracks)]
+                audio["discnumber"] = ["1"]
+                audio["disctotal"] = ["1"]
+
+                if mb_data and mb_data.get("date"):
+                    audio["date"] = [str(mb_data["date"])]
+
+                if mb_data and mb_data.get("genre"):
+                    audio["genre"] = [mb_data["genre"]]
+
+                if lyrics_text:
+                    audio["lyrics"] = [lyrics_text]
+
+                if prods:
+                    audio["producer"] = [", ".join(prods)]
+
+                if writers:
+                    audio["composer"] = [", ".join(writers)]
+
+                if cover_bytes:
+                    audio.clear_pictures()
+                    pic = Picture()
+                    pic.data = cover_bytes
+                    pic.type = 3
+                    pic.mime = "image/jpeg"
+                    pic.desc = "Cover"
+                    audio.add_picture(pic)
+
+                audio.save()
+            except Exception as flac_err:
+                logger.warning(f"Failed to tag FLAC track {file_path.name}: {flac_err}")
+
     return {
         "album": resolved_album,
         "artist": effective_artist,
@@ -451,6 +487,21 @@ def tag_playlist_hybrid(
                 audio.save()
             except Exception as e:
                 logger.warning(f"Failed to tag playlist Opus track {file_path.name}: {e}")
+
+        elif f_ext == ".flac":
+            try:
+                audio = FLAC(str(file_path))
+                audio["title"] = [resolved_title]
+                if resolved_artist:
+                    audio["artist"] = [resolved_artist]
+                    audio["albumartist"] = [resolved_artist]
+                if resolved_genre:
+                    audio["genre"] = [resolved_genre]
+                if lyrics_text:
+                    audio["lyrics"] = [lyrics_text]
+                audio.save()
+            except Exception as e:
+                logger.warning(f"Failed to tag playlist FLAC track {file_path.name}: {e}")
 
     return {
         "album": "Custom Playlist",

@@ -1,4 +1,8 @@
-"""Audio download pipelines for Aura Hub using yt-dlp and spotdl."""
+"""Audio download pipelines for Aura Hub using SpotiFLAC, yt-dlp, and spotdl.
+
+Implements multi-tier download dispatching across lossless streaming services and YouTube,
+supporting qualities: 'auto' (FLAC -> Opus fallback), 'flac', 'opus', and 'mp3'.
+"""
 
 import json
 import logging
@@ -21,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # Dedicated thread pool executor for CPU and subprocess-bound tasks
 executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="AuraDownloader")
+
+LOSSLESS_DOMAINS = ("spotify.com", "deezer.com", "tidal.com", "qobuz.com")
 
 
 def find_spotdl_binary() -> Optional[str]:
@@ -72,43 +78,150 @@ def run_pipeline(
     media_url: str,
     genius_raw: str = "",
     status_updater: Optional[Callable[[str], None]] = None,
+    quality: str = "auto",
 ) -> Tuple[Path, Dict[str, Any]]:
-    """Primary download and tagging orchestration pipeline for Spotify and YouTube sources."""
-    is_spotify = "spotify.com" in media_url.lower()
+    """Primary download and tagging orchestration pipeline.
+
+    Dispatches audio extraction based on media source and quality preference:
+    - YouTube / YouTube Music: directly invokes yt-dlp (MP3 for 'mp3'; native Opus for 'auto'/'opus'/'flac').
+    - Lossless streaming (Spotify, Deezer, Tidal, Qobuz):
+      * 'auto' or 'flac': attempts SpotiFLAC first, falling back to yt-dlp/spotdl native Opus on failure/absence.
+      * 'opus' or 'mp3': skips SpotiFLAC and extracts directly via yt-dlp/spotdl.
+    """
+    quality = (quality or "auto").lower().strip()
+    if quality not in ("auto", "flac", "opus", "mp3"):
+        quality = "auto"
+
+    is_lossless_source = any(d in media_url.lower() for d in LOSSLESS_DOMAINS)
     parsed_genius = parse_genius_input(genius_raw)
 
     if status_updater:
         status_updater("📥 `[1/4]` *Streaming & Extracting Audio Files...*")
 
-    if is_spotify:
-        spotdl_bin = find_spotdl_binary()
-        if not spotdl_bin:
-            raise RuntimeError(
-                "spotdl binary was not found. Please install spotdl (`pip install spotdl`) "
-                "or place it in PATH."
-            )
-
+    # ================= CASE 2: LOSSLESS STREAMING SERVICES =================
+    if is_lossless_source:
         clean_url = media_url.split("?")[0].strip()
         url_path = urllib.parse.urlsplit(clean_url).path.strip("/").split("/")
-        category = url_path[0] if url_path else "spotify"
+        category = url_path[0] if url_path else "media"
         slug = url_path[1] if len(url_path) > 1 else "collection"
-        folder_label = f"Spotify_{category.title()}_{slug[:8]}"
 
-        target_folder = config.BASE_DOWNLOAD_DIR / "Spotify Downloads" / folder_label
+        domain_name = "Streaming"
+        if "spotify.com" in clean_url.lower():
+            domain_name = "Spotify"
+        elif "tidal.com" in clean_url.lower():
+            domain_name = "Tidal"
+        elif "deezer.com" in clean_url.lower():
+            domain_name = "Deezer"
+        elif "qobuz.com" in clean_url.lower():
+            domain_name = "Qobuz"
+
+        folder_label = f"{domain_name}_{category.title()}_{slug[:8]}"
+        target_folder = config.BASE_DOWNLOAD_DIR / f"{domain_name} Downloads" / folder_label
         target_folder.mkdir(parents=True, exist_ok=True)
 
-        cmd = [
-            spotdl_bin,
-            "download",
-            clean_url,
-            "--output",
-            f"{target_folder}/{{artist}} - {{title}}.{{output-ext}}",
-            "--format",
-            "mp3",
+        flac_resolved = False
+
+        # Attempt SpotiFLAC when quality is 'auto' or 'flac'
+        if quality in ("auto", "flac"):
+            if status_updater:
+                status_updater("💎 `[1/4]` *Attempting Lossless FLAC Download via SpotiFLAC...*")
+            try:
+                from SpotiFLAC import SpotiFLAC
+
+                SpotiFLAC(
+                    url=clean_url,
+                    output_dir=target_folder,
+                    services=["tidal", "qobuz", "deezer", "amazon"],
+                    filename_format="{track}. {title}",
+                    use_track_numbers=True,
+                )
+            except Exception as e:
+                logger.warning(f"SpotiFLAC invocation failed: {e}")
+
+            flac_files = [
+                f for f in target_folder.iterdir()
+                if f.is_file() and f.suffix.lower() == ".flac"
+            ]
+            if flac_files:
+                flac_resolved = True
+                logger.info(f"SpotiFLAC successfully resolved {len(flac_files)} FLAC file(s).")
+            else:
+                if quality == "flac":
+                    raise RuntimeError(
+                        f"Lossless FLAC could not be resolved via SpotiFLAC for {clean_url}."
+                    )
+                logger.info("SpotiFLAC did not resolve FLAC files; falling back to native Opus extraction.")
+                if status_updater:
+                    status_updater("🎧 `[1/4]` *FLAC unavailable. Falling back to native Opus...*")
+
+        # Fallback / explicit compressed extraction
+        if not flac_resolved:
+            fallback_format = "mp3" if quality == "mp3" else "opus"
+
+            if domain_name == "Spotify":
+                spotdl_bin = find_spotdl_binary()
+                if spotdl_bin:
+                    cmd = [
+                        spotdl_bin,
+                        "download",
+                        clean_url,
+                        "--output",
+                        f"{target_folder}/{{artist}} - {{title}}.{{output-ext}}",
+                        "--format",
+                        fallback_format,
+                    ]
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    if res.returncode != 0:
+                        raise RuntimeError(f"spotdl failed:\n{res.stderr or res.stdout}")
+                else:
+                    if not shutil.which("yt-dlp"):
+                        raise RuntimeError(
+                            "spotdl binary was not found and yt-dlp is unavailable. "
+                            "Please install spotdl (`pip install spotdl`) or yt-dlp."
+                        )
+                    cmd = [
+                        "yt-dlp",
+                        "-x",
+                        "--audio-format",
+                        fallback_format,
+                        "--audio-quality",
+                        "0",
+                        "--embed-thumbnail",
+                        "--embed-metadata",
+                        "-o",
+                        str(target_folder / "%(title)s.%(ext)s"),
+                        clean_url,
+                    ]
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    if res.returncode != 0:
+                        raise RuntimeError(f"yt-dlp fallback failed:\n{res.stderr or res.stdout}")
+            else:
+                if not shutil.which("yt-dlp"):
+                    raise RuntimeError("yt-dlp binary is not installed or not in PATH.")
+                cmd = [
+                    "yt-dlp",
+                    "-x",
+                    "--audio-format",
+                    fallback_format,
+                    "--audio-quality",
+                    "0",
+                    "--embed-thumbnail",
+                    "--embed-metadata",
+                    "-o",
+                    str(target_folder / "%(title)s.%(ext)s"),
+                    clean_url,
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode != 0:
+                    raise RuntimeError(f"yt-dlp extraction failed:\n{res.stderr or res.stdout}")
+
+        # Validate that audio files were generated
+        audio_files = [
+            f for f in target_folder.iterdir()
+            if f.is_file() and f.suffix.lower() in (".flac", ".opus", ".mp3")
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise RuntimeError(f"spotdl failed:\n{res.stderr or res.stdout}")
+        if not audio_files:
+            raise RuntimeError(f"No audio files found in destination folder: {target_folder}")
 
         if parsed_genius:
             meta = tag_album_hybrid(
@@ -122,14 +235,25 @@ def run_pipeline(
         else:
             meta = tag_playlist_hybrid(target_folder, status_updater)
 
+        effective_artist = meta.get("artist") or ""
+        if effective_artist and effective_artist.lower() not in (
+            "various",
+            "unknown artist",
+            "various artists",
+        ):
+            target_folder = rehome_album_folder(target_folder, effective_artist)
+
         if status_updater:
             status_updater("🎤 `[4/4]` *Fetching Synced .lrc Lyrics...*")
         sync_all_lrc_in_folder(target_folder)
         return target_folder, meta
 
+    # ================= CASE 1: YOUTUBE & YOUTUBE MUSIC =================
     else:
         if not shutil.which("yt-dlp"):
             raise RuntimeError("yt-dlp binary is not installed or not in PATH.")
+
+        audio_format = "mp3" if quality == "mp3" else "opus"
 
         probe_cmd = ["yt-dlp", "--dump-single-json", "--flat-playlist", media_url]
         probe_res = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
@@ -153,7 +277,9 @@ def run_pipeline(
         if not raw_artist:
             raw_artist = "Unknown Artist"
 
-        clean_album = re.sub(r"^(Album|Playlist)\s*[-:]\s*", "", raw_album, flags=re.IGNORECASE).strip()
+        clean_album = re.sub(
+            r"^(Album|Playlist)\s*[-:]\s*", "", raw_album, flags=re.IGNORECASE
+        ).strip()
         clean_album = sanitize_filename(clean_album)
         clean_artist = sanitize_filename(raw_artist)
 
@@ -167,12 +293,14 @@ def run_pipeline(
         target_folder = config.BASE_DOWNLOAD_DIR / clean_artist / clean_album
         target_folder.mkdir(parents=True, exist_ok=True)
 
-        output_tmpl = str(target_folder / "%(track_number,playlist_index)02d - %(title)s.%(ext)s")
+        output_tmpl = str(
+            target_folder / "%(track_number,playlist_index)02d - %(title)s.%(ext)s"
+        )
         cmd = [
             "yt-dlp",
             "-x",
             "--audio-format",
-            "mp3",
+            audio_format,
             "--audio-quality",
             "0",
             "--embed-thumbnail",

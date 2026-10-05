@@ -4,11 +4,13 @@
 **Aura Hub** is an extensible Telegram bot built with `python-telegram-bot` (v20+ async `ApplicationBuilder`) designed to serve as a comprehensive management hub and automated audio ingestion pipeline for a self-hosted **Navidrome** music server.
 
 ### Key Capabilities:
-- **Audio Download Pipelines:** Downloads albums, singles, and playlists from YouTube, YouTube Music, and Spotify using `yt-dlp` and `spotdl`.
+- **Audio Download Pipelines:** Downloads albums, singles, and playlists across streaming services (Spotify, Deezer, Tidal, Qobuz) and YouTube/YouTube Music using `SpotiFLAC`, `yt-dlp`, and `spotdl`.
+- **Multi-Tier Quality Routing:** Supports `auto` (lossless FLAC with fallback to native Opus), `flac` (strict lossless), `opus` (fast native 160k stream), and `mp3` (standard 320k), configurable globally via `/quality` or per-command flags (`--flac`, `--opus`, `--mp3`).
 - **Intelligent Metadata Tagging:** Multi-stage enrichment using MusicBrainz REST API, AcoustID audio fingerprinting (via Chromaprint `fpcalc`), Cover Art Archive, and Genius.
+- **Native Multi-Format Tagging:** Native `.flac` (mutagen Vorbis comments + embedded Picture), `.opus` (Vorbis comments), and `.mp3` (ID3v2.3) tagging with Navidrome loose `cover.jpg` extraction.
 - **Transliteration & Phonetic Alignment:** Franco-Arabic translation (e.g. `3` -> `ع`, `7` -> `ح`) and bilingual artist splitting (e.g. `"Mohamed Mounir  محمد منير"` -> separate query tokens).
-- **Duration-Based Track Matching:** Mutagen audio length comparison ($\pm 4$s tolerance) prevents reversed or shuffled playlist numbering.
-- **Synced Karaoke Lyrics:** Fetches exact and fallback `.lrc` synchronized lyrics from LRCLIB and writes companion files for Navidrome/Symfonium.
+- **Duration-Based Track Matching:** Universal Mutagen audio length comparison ($\pm 4$s tolerance) prevents reversed or shuffled playlist numbering.
+- **Synced Karaoke Lyrics:** Fetches exact and fallback `.lrc` synchronized lyrics from LRCLIB and writes companion files for Navidrome/Symfonium across `.flac`, `.opus`, and `.mp3`.
 - **Navidrome / Subsonic Integration:** Direct Subsonic REST client to ping the server and trigger instant library scans (`/rest/startScan`, `/rest/ping`, `/rest/getScanStatus`).
 - **Interactive Telegram UI:** Multi-stage progress indicators (`[1/4]` -> `[4/4]`), high-resolution photo card summaries, paginated album folder browsers, and confirmation dialogs.
 
@@ -32,8 +34,9 @@ aura_hub/
 │   ├── __init__.py           # Package marker
 │   ├── metadata.py           # MusicBrainz REST client, Cover Art Archive fetcher, AcoustID matcher
 │   ├── lyrics.py             # LRCLIB exact & fallback synced lyrics engine (.lrc)
-│   ├── tagger.py             # Mutagen ID3 engine, duration/phonetic track alignment, loose cover.jpg writer
-│   ├── downloader.py         # yt-dlp & spotdl execution pipelines with dynamic progress updates
+│   ├── tagger.py             # Mutagen FLAC, Vorbis & ID3 engine, duration/phonetic track alignment, loose cover.jpg writer
+│   ├── downloader.py         # Multi-tier downloader: SpotiFLAC primary, yt-dlp & spotdl Opus fallback pipelines
+│   ├── settings.py           # Persistent audio quality preferences (auto, flac, opus, mp3) & CLI flag parser
 │   ├── navidrome.py          # Subsonic/Navidrome REST client (/rest/startScan, /rest/ping, etc.)
 │   ├── system.py             # Storage metrics, tool availability diagnostics, safe folder deletion
 │   ├── library_browser.py    # Visual library scanning, safe cover art serving, and metadata health badges
@@ -50,6 +53,7 @@ aura_hub/
 │   ├── navidrome.py          # /rescan (triggers instant Navidrome Subsonic library scan), /scanstatus
 │   ├── nowplaying.py         # /nowplaying, /np active stream monitor with interactive refresh
 │   ├── request.py            # /request queue, admin approval/rejection cards, ingestion pipeline
+│   ├── settings.py           # /quality interactive quality preference selector
 │   ├── system.py             # /storage, /disk metrics
 │   └── users.py              # /users, /adduser, password reset, and account deletion
 └── tests/
@@ -116,9 +120,9 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
   - *Tier 3 (Native Script Fallback):* Falls back to native script (e.g. Arabic script) only if no Latin alias or input candidate exists.
 
 ### 4.3 Multi-Format Tagging & Duration-Tolerant Alignment (`services/tagger.py`)
-- **Multi-Format Engine:** Supports both `.mp3` (ID3v2.3: `TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`, `TPOS`, `TDRC`, `TCON`, `USLT`, `TCOM`, `IPLS`, `APIC`) and `.opus` (Vorbis comments: `title`, `artist`, `albumartist`, `album`, `tracknumber`, `totaltracks`, `date`, `genre`, `lyrics`, `composer`, `producer`, `metadata_block_picture`).
+- **Multi-Format Engine:** Supports `.flac` (mutagen `FLAC` Vorbis comments + embedded `Picture`), `.opus` (Vorbis comments: `title`, `artist`, `albumartist`, `album`, `tracknumber`, `totaltracks`, `date`, `genre`, `lyrics`, `composer`, `producer`, `metadata_block_picture`), and `.mp3` (ID3v2.3: `TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`, `TPOS`, `TDRC`, `TCON`, `USLT`, `TCOM`, `IPLS`, `APIC`).
 - When tagging multi-track albums, tracks are matched using `find_best_track_match()`:
-  - Computes local audio length using mutagen: `MP3` or `OggOpus`.
+  - Computes local audio length universally using mutagen: `mutagen.File(file_path).info.length`.
   - Compares duration against MusicBrainz track duration with tiered scoring:
     - $\le 2.5$s difference: $+80$ score bonus.
     - $\le 5.0$s difference: $+45$ score bonus.
@@ -130,7 +134,7 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
 
 ### 4.4 Synced Lyrics Engine (`services/lyrics.py`)
 - Queries `https://lrclib.net/api/get` (exact match) and `https://lrclib.net/api/search` (search fallback).
-- Writes a `.lrc` file with the exact same base name as the `.mp3` or `.opus` audio file.
+- Writes a `.lrc` file with the exact same base name as the `.flac`, `.opus`, or `.mp3` audio file.
 
 ### 4.5 Subsonic / Navidrome Client (`services/navidrome.py`)
 - Communicates with Navidrome's Subsonic REST API endpoint (`http://localhost:4533/rest/`).
@@ -197,6 +201,17 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
 - **Frontend Dashboard:** Built with vanilla HTML/CSS/JS with Google Fonts (Outfit & Inter), Telegram theme CSS variables, responsive tabs, modals, and `Telegram.WebApp.HapticFeedback`. Uses dynamic subpath resolution (`getApiUrl`) and content-type checking before JSON parsing to prevent non-JSON parse errors. Features role-aware UI navigation (Listeners see Streams, Requests, Library; Admins see Ingest, Requests, Library, Users, Server), Ingest stepper with live progress polling, enriched task cards with cover thumbnails and metadata lines, Requests queue drawer with clear history action, Now Playing stream cards with 64x64px artwork and animated equalizer bars, and a mobile-optimized bottom navigation bar with horizontal scrolling and compact layout for narrow screens (`< 420px`).
 - **Bot Integration:** Configures the Telegram chat menu button (`MenuButtonWebApp`) pointing to `WEBAPP_EXTERNAL_URL`, with `/hub` command fallback.
 
+### 4.11 Quality & Engine Routing Strategy (`services/downloader.py` & `services/settings.py`)
+- **Multi-Tier Quality Preferences:** Supports `auto` (FLAC -> native Opus fallback), `flac` (lossless only), `opus` (fast native 160k stream), and `mp3` (standard 320k).
+- **Persistent Preferences:** Stored in `data/settings.json` with user overrides and global defaults, managed via `/quality` or per-execution CLI flags (`--flac`, `--opus`, `--mp3`).
+- **Engine Routing Matrix:**
+  - *Case 1 (YouTube & YouTube Music URLs):* Routes directly to `yt-dlp`. If quality is `mp3`, extracts MP3 (`--audio-format mp3 --audio-quality 0`). Otherwise (`auto`, `opus`, `flac`), extracts native Opus (`--audio-format opus --audio-quality 0`).
+  - *Case 2 (Lossless Streaming: Spotify, Deezer, Tidal, Qobuz):*
+    - If quality is explicitly `opus` or `mp3`: Skips SpotiFLAC; extracts directly via `yt-dlp` or `spotdl`.
+    - If quality is `auto` or `flac`: Attempts lossless extraction via `SpotiFLAC`. If `.flac` files are produced, tags them natively with `mutagen.flac`. If no `.flac` files exist or SpotiFLAC fails:
+      - Forced `flac`: Raises a clear error stating FLAC could not be resolved.
+      - `auto`: Logs fallback and extracts native Opus via `yt-dlp` or `spotdl`.
+
 ---
 
 ## 5. Telegram Bot Command Reference
@@ -206,12 +221,13 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
 | `/start` | `handlers/common.py` | All Users | Welcome card and feature overview |
 | `/help` | `handlers/common.py` | All Users | Syntax guide and examples |
 | `/hub` | `handlers/common.py` | All Users | Open the interactive Telegram Mini App dashboard |
+| `/quality` | `handlers/settings.py` | All Users | Interactive audio download quality preference selector |
 | `/status` | `handlers/common.py` | All Users | Health check for Bot, external binaries, and Navidrome ping |
 | `/nowplaying`, `/np` | `handlers/nowplaying.py` | All Users | Real-time active playback session monitor with in-place refresh |
 | `/request <link or query>` | `handlers/request.py` | All Users | Queue a track, album, or URL for admin review |
 | `/search <query>` | `handlers/download.py` | All Users | Interactive YouTube search (downloads for admins, queues for users) |
-| `/download <url>` | `handlers/download.py` | Admins | Direct download and tagging (routes users to `/request`) |
-| `/genius <url> \| <g_url>` | `handlers/download.py` | Admins | Explicit Genius URL pairing |
+| `/download <url> [--flag]` | `handlers/download.py` | Admins | Direct download and tagging with optional `--flac`, `--opus`, `--mp3` flags |
+| `/genius <url> \| <g_url>` | `handlers/download.py` | Admins | Explicit Genius URL pairing with optional quality flag |
 | `/retag` | `handlers/library.py` | Admins | Interactive paginated album browser to refresh ID3 tags and `.lrc` |
 | `/delete`, `/remove` | `handlers/library.py` | Admins | Interactive album browser with confirmation dialog for folder removal |
 | `/rescan` | `handlers/navidrome.py` | Admins | Triggers immediate Navidrome Subsonic library scan |
@@ -221,7 +237,7 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
 | `/requests` | `handlers/request.py` | Admins | View pending and recent items in the ingestion queue |
 | `/storage`, `/disk` | `handlers/system.py` | All Users | Displays disk partition metrics and indexed MP3/LRC counts |
 
-*Direct Link Auto-Catcher:* Pasting any raw YouTube or Spotify link directly into chat downloads immediately for administrators, or queues an ingestion request for standard allowed users.
+*Direct Link Auto-Catcher:* Pasting any raw Spotify, Tidal, Deezer, Qobuz, or YouTube link directly into chat downloads immediately for administrators (respecting user/global quality preference or flag), or queues an ingestion request for standard allowed users.
 
 ---
 

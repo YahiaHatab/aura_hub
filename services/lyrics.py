@@ -80,7 +80,7 @@ def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
 
     audio_files = [
         f for f in folder_path.iterdir()
-        if f.suffix.lower() in (".mp3", ".opus")
+        if f.suffix.lower() in (".mp3", ".opus", ".flac")
     ]
 
     for audio_path in audio_files:
@@ -104,6 +104,15 @@ def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
                 from mutagen.oggopus import OggOpus
 
                 audio = OggOpus(str(audio_path))
+                title = audio.get("title", [""])[0]
+                artist = audio.get("artist", [""])[0]
+            except Exception:
+                pass
+        elif f_ext == ".flac":
+            try:
+                from mutagen.flac import FLAC
+
+                audio = FLAC(str(audio_path))
                 title = audio.get("title", [""])[0]
                 artist = audio.get("artist", [""])[0]
             except Exception:

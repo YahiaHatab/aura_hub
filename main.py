@@ -11,7 +11,7 @@ from telegram import BotCommand, MenuButtonWebApp, WebAppInfo
 from telegram.ext import Application, ApplicationBuilder
 
 import config
-from handlers import common, download, library, navidrome, nowplaying, request, system, users
+from handlers import common, download, library, navidrome, nowplaying, request, settings, system, users
 
 # Configure application logging
 logging.basicConfig(
@@ -28,6 +28,7 @@ async def post_init(application: Application) -> None:
         BotCommand("nowplaying", "Live playback sessions on Navidrome"),
         BotCommand("request", "Request music for ingestion"),
         BotCommand("search", "Search tracks on YouTube with interactive buttons"),
+        BotCommand("quality", "Set audio download quality preference"),
         BotCommand("download", "Download Spotify/YouTube URL (Admin)"),
         BotCommand("genius", "Download with explicit Genius album match (Admin)"),
         BotCommand("retag", "Browse folders to update tags & .lrc (Admin)"),
@@ -75,6 +76,7 @@ def build_application() -> Application:
         navidrome.router,
         nowplaying.router,
         request.router,
+        settings.router,
         system.router,
         users.router,
     ]

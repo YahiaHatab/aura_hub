@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from telegram import InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -19,6 +19,7 @@ import config
 from handlers.common import admin_required, auth_required, is_admin
 from services.downloader import executor, run_pipeline, run_youtube_search
 from services.navidrome import navidrome_client
+from services.settings import get_quality_preference, parse_quality_flag
 from utils.keyboards import build_search_results_keyboard
 
 logger = logging.getLogger(__name__)
@@ -30,14 +31,19 @@ async def execute_task(
     media_url: str,
     genius_input: str = "",
     custom_title: Optional[str] = None,
+    quality: Optional[str] = None,
 ):
     """Executes the complete download and tagging pipeline with live status updates and photo cards."""
     chat = update.effective_chat
     if not chat:
         return
 
+    user = update.effective_user
+    user_id = user.id if user else None
+    effective_quality = quality or get_quality_preference(user_id)
+
     status_msg = await chat.send_message(
-        "⏳ `[1/4]` *Initializing download pipeline...*",
+        f"⏳ `[1/4]` *Initializing download pipeline ({effective_quality.upper()})...*",
         parse_mode="Markdown",
     )
 
@@ -50,12 +56,27 @@ async def execute_task(
 
     try:
         target_folder, meta = await loop.run_in_executor(
-            executor, run_pipeline, media_url, genius_input, sync_status_updater
+            executor,
+            run_pipeline,
+            media_url,
+            genius_input,
+            sync_status_updater,
+            effective_quality,
         )
 
         folder_path = Path(target_folder)
+        flac_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".flac"])
+        opus_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".opus"])
         mp3_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
+        total_audio = flac_count + opus_count + mp3_count
         lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
+
+        if flac_count > 0:
+            format_tag = f"{flac_count} FLAC (Lossless)"
+        elif opus_count > 0:
+            format_tag = f"{opus_count} Opus (Native)"
+        else:
+            format_tag = f"{mp3_count} MP3"
 
         album_title = meta.get("album", "Album")
         artist = meta.get("artist", "Artist")
@@ -69,7 +90,7 @@ async def execute_task(
             f"🏷️ `{genre}`\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{track_summary}"
-            f"✓ *Tracks:* {mp3_count} MP3s tagged\n"
+            f"✓ *Tracks:* {total_audio} tagged ({format_tag})\n"
             f"✓ *Synced Lyrics:* {lrc_count} `.lrc` files attached\n"
             f"📂 *Location:* `{folder_path.name}`\n\n"
             f"✨ *Ready in Symfonium & Navidrome!*"
@@ -107,17 +128,21 @@ async def auto_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
+    clean_text, flag_qual = parse_quality_flag(text)
     user = update.effective_user
+    chosen_qual = flag_qual or get_quality_preference(user.id if user else None)
+
     if user and is_admin(user.id):
-        await execute_task(update, context, text, "")
+        await execute_task(update, context, clean_text, "", quality=chosen_qual)
     else:
         from handlers.request import submit_request
-        await submit_request(update, context, text)
+
+        await submit_request(update, context, clean_text)
 
 
 @auth_required
 async def download_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /download command with optional Genius match syntax (URL | GeniusURL).
+    """Handles /download command with optional Genius match syntax (URL | GeniusURL) and quality flags.
 
     Admins download immediately; standard users are routed to the request queue.
     """
@@ -126,45 +151,54 @@ async def download_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     raw_args = update.message.text.partition(" ")[2].strip()
     if not raw_args:
-        await update.message.reply_text("Please provide a link. Example:\n`/download <url>`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "Please provide a link. Example:\n`/download <url> [--flac|--opus|--mp3]`",
+            parse_mode="Markdown",
+        )
         return
 
+    clean_args, flag_qual = parse_quality_flag(raw_args)
     user = update.effective_user
     if user and not is_admin(user.id):
         from handlers.request import submit_request
-        await submit_request(update, context, raw_args)
+
+        await submit_request(update, context, clean_args)
         return
 
     genius_input = ""
-    if "|" in raw_args:
-        parts = raw_args.split("|", 1)
+    if "|" in clean_args:
+        parts = clean_args.split("|", 1)
         media_url = parts[0].strip()
         genius_input = parts[1].strip()
     else:
-        media_url = raw_args
+        media_url = clean_args
 
-    await execute_task(update, context, media_url, genius_input)
+    chosen_qual = flag_qual or get_quality_preference(user.id if user else None)
+    await execute_task(update, context, media_url, genius_input, quality=chosen_qual)
 
 
 @admin_required
 async def genius_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /genius command requiring explicit <media_url> | <genius_url> pairing."""
+    """Handles /genius command requiring explicit <media_url> | <genius_url> pairing and optional quality flag."""
     if not update.message or not update.message.text:
         return
 
     raw_args = update.message.text.partition(" ")[2].strip()
     if not raw_args or "|" not in raw_args:
         await update.message.reply_text(
-            "Format required:\n`/genius <music_url> | <genius_url>`",
+            "Format required:\n`/genius <music_url> | <genius_url> [--flac|--opus|--mp3]`",
             parse_mode="Markdown",
         )
         return
 
-    parts = raw_args.split("|", 1)
+    clean_args, flag_qual = parse_quality_flag(raw_args)
+    parts = clean_args.split("|", 1)
     media_url = parts[0].strip()
     genius_input = parts[1].strip()
 
-    await execute_task(update, context, media_url, genius_input)
+    user = update.effective_user
+    chosen_qual = flag_qual or get_quality_preference(user.id if user else None)
+    await execute_task(update, context, media_url, genius_input, quality=chosen_qual)
 
 
 @auth_required
@@ -226,6 +260,7 @@ async def search_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     user = update.effective_user
     if user and not is_admin(user.id):
         from handlers.request import submit_request
+
         await query.edit_message_text(
             f"📥 *Queueing request for:* `{chosen_title}`...",
             parse_mode="Markdown",
@@ -233,8 +268,9 @@ async def search_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await submit_request(update, context, chosen_url, custom_title=chosen_title)
         return
 
+    chosen_qual = get_quality_preference(user.id if user else None)
     await query.edit_message_text(
-        f"⏳ `[1/4]` *Starting download for:*\n`{chosen_title}`...",
+        f"⏳ `[1/4]` *Starting download ({chosen_qual.upper()}) for:*\n`{chosen_title}`...",
         parse_mode="Markdown",
     )
 
@@ -247,10 +283,21 @@ async def search_callback_handler(update: Update, context: ContextTypes.DEFAULT_
 
     try:
         target_folder, meta = await loop.run_in_executor(
-            executor, run_pipeline, chosen_url, "", sync_search_updater
+            executor, run_pipeline, chosen_url, "", sync_search_updater, chosen_qual
         )
         folder_path = Path(target_folder)
+        flac_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".flac"])
+        opus_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".opus"])
+        mp3_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
+        total_audio = flac_count + opus_count + mp3_count
         lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
+
+        if flac_count > 0:
+            fmt_label = f"{flac_count} FLAC (Lossless)"
+        elif opus_count > 0:
+            fmt_label = f"{opus_count} Opus (Native)"
+        else:
+            fmt_label = f"{mp3_count} MP3"
 
         album_title = meta.get("album", "Album")
         artist = meta.get("artist", "Artist")
@@ -263,6 +310,7 @@ async def search_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             f"🏷️ `{genre}`\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"✓ *Track:* {chosen_title}\n"
+            f"✓ *Format:* {fmt_label}\n"
             f"✓ *Synced Lyrics:* {lrc_count} `.lrc` file\n"
             f"📂 *Saved to:* `{folder_path.name}`"
         )
@@ -302,7 +350,7 @@ router = [
         filters.TEXT
         & ~filters.COMMAND
         & filters.Regex(
-            r"(https?://(open\.spotify\.com|www\.youtube\.com|youtu\.be|music\.youtube\.com)/\S+)"
+            r"https?://(?:[\w-]+\.)?(?:spotify\.com|spotify\.link|youtube\.com|youtu\.be|tidal\.com|deezer\.com|qobuz\.com)/\S+"
         ),
         auto_link_handler,
     ),
