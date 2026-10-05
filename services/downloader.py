@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import config
 from services.lyrics import sync_all_lrc_in_folder
+from services.system import rehome_album_folder
 from services.tagger import tag_album_hybrid, tag_playlist_hybrid
 from utils.helpers import parse_genius_input, sanitize_filename
 
@@ -193,6 +194,10 @@ def run_pipeline(
             status_updater,
         )
 
+        effective_artist = meta.get("artist") or ""
+        if effective_artist:
+            target_folder = rehome_album_folder(target_folder, effective_artist)
+
         if status_updater:
             status_updater("🎤 `[4/4]` *Fetching Synced .lrc Lyrics...*")
         sync_all_lrc_in_folder(target_folder)
@@ -204,7 +209,7 @@ def run_retag_folder(
     genius_raw: str = "",
     status_updater: Optional[Callable[[str], None]] = None,
 ) -> Tuple[Path, Dict[str, Any]]:
-    """Retags an existing local music directory and downloads missing synced lyrics."""
+    """Retags an existing local music directory, unifies artist folder, and downloads missing synced lyrics."""
     folder_path = Path(target_folder).resolve()
     folder_name = folder_path.name
     parent_name = folder_path.parent.name
@@ -216,6 +221,11 @@ def run_retag_folder(
     meta = tag_album_hybrid(
         folder_path, album_name, artist_name, genius_raw, parsed, status_updater
     )
+
+    # Re-home folder if canonical artist differs from directory
+    effective_artist = meta.get("artist") or ""
+    if effective_artist:
+        folder_path = rehome_album_folder(folder_path, effective_artist)
 
     if status_updater:
         status_updater("🎤 `[4/4]` *Generating Synced .lrc Lyrics...*")

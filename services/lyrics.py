@@ -70,7 +70,7 @@ def fetch_and_save_lrc(
 
 
 def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
-    """Scans all MP3 files in a directory and fetches missing .lrc companion files.
+    """Scans all MP3 and Opus files in a directory and fetches missing .lrc companion files.
 
     Returns the total number of synced .lrc files present in the folder.
     """
@@ -78,25 +78,39 @@ def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
     if not folder_path.is_dir():
         return 0
 
-    mp3_files = [f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"]
+    audio_files = [
+        f for f in folder_path.iterdir()
+        if f.suffix.lower() in (".mp3", ".opus")
+    ]
 
-    for mp3_path in mp3_files:
-        lrc_path = mp3_path.with_suffix(".lrc")
+    for audio_path in audio_files:
+        lrc_path = audio_path.with_suffix(".lrc")
         if lrc_path.exists():
             continue
 
         title, artist = "", ""
-        try:
-            audio = ID3(str(mp3_path))
-            if "TIT2" in audio and audio["TIT2"].text:
-                title = str(audio["TIT2"].text[0])
-            if "TPE1" in audio and audio["TPE1"].text:
-                artist = str(audio["TPE1"].text[0])
-        except Exception:
-            pass
+        f_ext = audio_path.suffix.lower()
+        if f_ext == ".mp3":
+            try:
+                audio = ID3(str(audio_path))
+                if "TIT2" in audio and audio["TIT2"].text:
+                    title = str(audio["TIT2"].text[0])
+                if "TPE1" in audio and audio["TPE1"].text:
+                    artist = str(audio["TPE1"].text[0])
+            except Exception:
+                pass
+        elif f_ext == ".opus":
+            try:
+                from mutagen.oggopus import OggOpus
+
+                audio = OggOpus(str(audio_path))
+                title = audio.get("title", [""])[0]
+                artist = audio.get("artist", [""])[0]
+            except Exception:
+                pass
 
         if not title:
-            stem = mp3_path.stem
+            stem = audio_path.stem
             if " - " in stem:
                 parts = stem.split(" - ", 1)
                 artist, title = parts[0].strip(), parts[1].strip()
@@ -107,3 +121,4 @@ def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
 
     total_lrcs = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
     return total_lrcs
+

@@ -1,9 +1,10 @@
-"""Mutagen ID3 tagging engine for Aura Hub.
+"""Mutagen ID3 & Vorbis tagging engine for Aura Hub.
 
 Implements duration/phonetic track alignment, loose cover.jpg generation for Navidrome,
-and comprehensive ID3v2.3 tagging (APIC, TIT2, TPE1, TRCK, TPOS, TDRC, TCON, USLT, TCOM, IPLS).
+and comprehensive ID3v2.3 (MP3) and Vorbis comment (Opus) tagging.
 """
 
+import base64
 import logging
 import os
 import re
@@ -11,15 +12,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
+from mutagen.flac import Picture
 from mutagen.id3 import (
     APIC,
     ID3,
     IPLS,
+    TALB,
     TCOM,
     TCON,
     TDRC,
     TIT2,
     TPE1,
+    TPE2,
     TPOS,
     TRCK,
     TXXX,
@@ -27,6 +31,7 @@ from mutagen.id3 import (
     ID3NoHeaderError,
 )
 from mutagen.mp3 import MP3
+from mutagen.oggopus import OggOpus
 
 from services.metadata import (
     get_genius_client,
@@ -38,6 +43,8 @@ from utils.helpers import extract_clean_artists, franco_to_arabic, get_clean_nam
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".opus"}
+
 
 def find_best_track_match(
     local_file_path: Union[str, Path],
@@ -46,7 +53,7 @@ def find_best_track_match(
     mb_tracks: List[Dict[str, Any]],
     assigned_positions: Set[int],
 ) -> Tuple[str, int]:
-    """Matches local MP3 against MusicBrainz tracks using Text Similarity + Audio Duration tolerance.
+    """Matches local MP3 or Opus against MusicBrainz tracks using Text Similarity + Audio Duration tolerance.
 
     Avoids index corruption when YouTube playlists are shuffled, reversed, or misnumbered.
     """
@@ -56,8 +63,19 @@ def find_best_track_match(
     # 1. Obtain local audio duration via mutagen
     local_duration = 0.0
     try:
-        audio_info = MP3(str(local_file_path))
-        local_duration = float(audio_info.info.length)
+        path_obj = Path(local_file_path)
+        ext = path_obj.suffix.lower()
+        if ext == ".mp3":
+            audio_info = MP3(str(path_obj))
+            local_duration = float(audio_info.info.length)
+        elif ext == ".opus":
+            audio_info = OggOpus(str(path_obj))
+            local_duration = float(audio_info.info.length)
+        else:
+            import mutagen
+            audio_info = mutagen.File(str(path_obj))
+            if audio_info and audio_info.info:
+                local_duration = float(audio_info.info.length)
     except Exception as e:
         logger.debug(f"Could not read duration for {local_file_path}: {e}")
 
@@ -129,16 +147,16 @@ def tag_album_hybrid(
     parsed_genius: Optional[Dict[str, Any]] = None,
     status_updater: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
-    """Applies multi-stage metadata tagging across all MP3s in an album folder.
+    """Applies multi-stage metadata tagging across all MP3 and Opus files in an album folder.
 
     Stages:
-    1. MusicBrainz & AcoustID resolution
+    1. MusicBrainz & AcoustID resolution (with Latin-Canonical artist normalization)
     2. Genius credits (composer, producer, lyrics)
     3. Cover Art Archive high-res retrieval and loose cover.jpg writing
-    4. Mutagen ID3 embedding with duration alignment
+    4. Mutagen ID3 (MP3) & Vorbis Comment (Opus) embedding with duration alignment
     """
     folder_path = Path(folder)
-    files = sorted([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
+    files = sorted([f for f in folder_path.iterdir() if f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS])
     sample_track = str(files[0]) if files else None
 
     if status_updater:
@@ -148,9 +166,16 @@ def tag_album_hybrid(
         album_name, artist_name, sample_file=sample_track
     )
 
-    effective_artist = (mb_data.get("artist") if mb_data else None) or artist_name
+    if mb_data and mb_data.get("artist"):
+        effective_artist = mb_data["artist"]
+    else:
+        latin_cands = [a for a in extract_clean_artists(artist_name) if a.isascii()]
+        effective_artist = latin_cands[0] if latin_cands else artist_name
+
+    resolved_album = (mb_data.get("title") if mb_data else None) or album_name
+
     genius_album = search_genius_album(
-        album_name, effective_artist, parsed_genius=parsed_genius, genius_raw=genius_raw
+        resolved_album, effective_artist, parsed_genius=parsed_genius, genius_raw=genius_raw
     )
     genius = get_genius_client()
 
@@ -211,38 +236,14 @@ def tag_album_hybrid(
                     matched_genius_song = s_obj
                     break
 
-        try:
-            audio = ID3(str(file_path))
-        except ID3NoHeaderError:
-            audio = ID3()
-
-        audio.delall("TIT2")
-        audio.add(TIT2(encoding=3, text=matched_title))
-
-        if effective_artist and effective_artist.lower() not in ("unknown artist", "various"):
-            audio.delall("TPE1")
-            audio.add(TPE1(encoding=3, text=effective_artist))
-
-        audio.delall("TRCK")
-        audio.add(TRCK(encoding=3, text=f"{final_track_num}/{total_tracks}"))
-        audio.delall("TPOS")
-        audio.add(TPOS(encoding=3, text="1/1"))
-
-        if mb_data and mb_data.get("date"):
-            audio.delall("TDRC")
-            audio.add(TDRC(encoding=3, text=str(mb_data["date"])))
-
-        if mb_data and mb_data.get("genre"):
-            audio.delall("TCON")
-            audio.add(TCON(encoding=3, text=mb_data["genre"]))
-
+        song_dict: Dict[str, Any] = {}
+        lyrics_text = None
         if matched_genius_song and genius:
             sid = getattr(matched_genius_song, "id_", None) or (
                 matched_genius_song._body.get("id")
                 if hasattr(matched_genius_song, "_body")
                 else None
             )
-            song_dict = {}
             lyrics_text = getattr(matched_genius_song, "lyrics", None)
             if sid:
                 try:
@@ -252,37 +253,115 @@ def tag_album_hybrid(
                 except Exception:
                     song_dict = getattr(matched_genius_song, "_body", {})
 
+        prods = [p["name"] for p in song_dict.get("producer_artists", []) if "name" in p]
+        writers = [w["name"] for w in song_dict.get("writer_artists", []) if "name" in w]
+
+        f_ext = file_path.suffix.lower()
+
+        # Tag MP3 files with ID3v2.3
+        if f_ext == ".mp3":
+            try:
+                audio = ID3(str(file_path))
+            except ID3NoHeaderError:
+                audio = ID3()
+
+            audio.delall("TIT2")
+            audio.add(TIT2(encoding=3, text=matched_title))
+
+            if effective_artist and effective_artist.lower() not in ("unknown artist", "various"):
+                audio.delall("TPE1")
+                audio.add(TPE1(encoding=3, text=effective_artist))
+                audio.delall("TPE2")
+                audio.add(TPE2(encoding=3, text=effective_artist))
+
+            audio.delall("TALB")
+            audio.add(TALB(encoding=3, text=resolved_album))
+
+            audio.delall("TRCK")
+            audio.add(TRCK(encoding=3, text=f"{final_track_num}/{total_tracks}"))
+            audio.delall("TPOS")
+            audio.add(TPOS(encoding=3, text="1/1"))
+
+            if mb_data and mb_data.get("date"):
+                audio.delall("TDRC")
+                audio.add(TDRC(encoding=3, text=str(mb_data["date"])))
+
+            if mb_data and mb_data.get("genre"):
+                audio.delall("TCON")
+                audio.add(TCON(encoding=3, text=mb_data["genre"]))
+
             if lyrics_text:
                 audio.delall("USLT")
                 audio.add(USLT(encoding=3, lang="ara", desc="", text=lyrics_text))
 
-            prods = [p["name"] for p in song_dict.get("producer_artists", []) if "name" in p]
             if prods:
                 p_str = ", ".join(prods)
                 audio.add(TXXX(encoding=3, desc="PRODUCER", text=p_str))
                 audio.add(IPLS(encoding=3, people=[("producer", p_str)]))
 
-            writers = [w["name"] for w in song_dict.get("writer_artists", []) if "name" in w]
             if writers:
                 audio.delall("TCOM")
                 audio.add(TCOM(encoding=3, text=", ".join(writers)))
 
-        if cover_bytes:
-            audio.delall("APIC")
-            audio.add(
-                APIC(
-                    encoding=3,
-                    mime="image/jpeg",
-                    type=3,
-                    desc="Cover",
-                    data=cover_bytes,
+            if cover_bytes:
+                audio.delall("APIC")
+                audio.add(
+                    APIC(
+                        encoding=3,
+                        mime="image/jpeg",
+                        type=3,
+                        desc="Cover",
+                        data=cover_bytes,
+                    )
                 )
-            )
 
-        audio.save(str(file_path), v2_version=3)
+            audio.save(str(file_path), v2_version=3)
+
+        # Tag Opus files with Vorbis comments
+        elif f_ext == ".opus":
+            try:
+                audio = OggOpus(str(file_path))
+                audio["title"] = [matched_title]
+
+                if effective_artist and effective_artist.lower() not in ("unknown artist", "various"):
+                    audio["artist"] = [effective_artist]
+                    audio["albumartist"] = [effective_artist]
+
+                audio["album"] = [resolved_album]
+                audio["tracknumber"] = [str(final_track_num)]
+                audio["totaltracks"] = [str(total_tracks)]
+                audio["discnumber"] = ["1"]
+                audio["totaldiscs"] = ["1"]
+
+                if mb_data and mb_data.get("date"):
+                    audio["date"] = [str(mb_data["date"])]
+
+                if mb_data and mb_data.get("genre"):
+                    audio["genre"] = [mb_data["genre"]]
+
+                if lyrics_text:
+                    audio["lyrics"] = [lyrics_text]
+
+                if prods:
+                    audio["producer"] = [", ".join(prods)]
+
+                if writers:
+                    audio["composer"] = [", ".join(writers)]
+
+                if cover_bytes:
+                    p = Picture()
+                    p.data = cover_bytes
+                    p.type = 3
+                    p.mime = "image/jpeg"
+                    p.desc = "Cover"
+                    audio["metadata_block_picture"] = [base64.b64encode(p.write()).decode("ascii")]
+
+                audio.save()
+            except Exception as opus_err:
+                logger.warning(f"Failed to tag Opus track {file_path.name}: {opus_err}")
 
     return {
-        "album": (mb_data.get("title") if mb_data else None) or album_name,
+        "album": resolved_album,
         "artist": effective_artist,
         "year": (mb_data.get("date") if mb_data else None) or "",
         "genre": (mb_data.get("genre") if mb_data else None) or "Music",
@@ -294,10 +373,10 @@ def tag_playlist_hybrid(
     folder: Union[str, Path],
     status_updater: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
-    """Tags individual tracks in a custom playlist folder."""
+    """Tags individual tracks in a custom playlist folder supporting MP3 and Opus."""
     folder_path = Path(folder)
     genius = get_genius_client()
-    files = [f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"]
+    files = sorted([f for f in folder_path.iterdir() if f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS])
 
     if status_updater:
         status_updater("⚡ `[2/4]` *Tagging Playlist Tracks via MusicBrainz...*")
@@ -322,23 +401,8 @@ def tag_playlist_hybrid(
             except Exception:
                 pass
 
-        try:
-            audio = ID3(str(file_path))
-        except ID3NoHeaderError:
-            audio = ID3()
-
-        audio.delall("TIT2")
-        audio.add(TIT2(encoding=3, text=resolved_title))
-        if resolved_artist:
-            audio.delall("TPE1")
-            audio.add(TPE1(encoding=3, text=resolved_artist))
-
-        if resolved_genre:
-            audio.delall("TCON")
-            audio.add(TCON(encoding=3, text=resolved_genre))
-
+        lyrics_text = getattr(song, "lyrics", None) if song else None
         if song and genius:
-            lyrics_text = getattr(song, "lyrics", None)
             sid = getattr(song, "id_", None) or (
                 song._body.get("id") if hasattr(song, "_body") else None
             )
@@ -348,11 +412,45 @@ def tag_playlist_hybrid(
                 except Exception:
                     pass
 
+        f_ext = file_path.suffix.lower()
+        if f_ext == ".mp3":
+            try:
+                audio = ID3(str(file_path))
+            except ID3NoHeaderError:
+                audio = ID3()
+
+            audio.delall("TIT2")
+            audio.add(TIT2(encoding=3, text=resolved_title))
+            if resolved_artist:
+                audio.delall("TPE1")
+                audio.add(TPE1(encoding=3, text=resolved_artist))
+                audio.delall("TPE2")
+                audio.add(TPE2(encoding=3, text=resolved_artist))
+
+            if resolved_genre:
+                audio.delall("TCON")
+                audio.add(TCON(encoding=3, text=resolved_genre))
+
             if lyrics_text:
                 audio.delall("USLT")
                 audio.add(USLT(encoding=3, lang="eng", desc="", text=lyrics_text))
 
-        audio.save(str(file_path), v2_version=3)
+            audio.save(str(file_path), v2_version=3)
+
+        elif f_ext == ".opus":
+            try:
+                audio = OggOpus(str(file_path))
+                audio["title"] = [resolved_title]
+                if resolved_artist:
+                    audio["artist"] = [resolved_artist]
+                    audio["albumartist"] = [resolved_artist]
+                if resolved_genre:
+                    audio["genre"] = [resolved_genre]
+                if lyrics_text:
+                    audio["lyrics"] = [lyrics_text]
+                audio.save()
+            except Exception as e:
+                logger.warning(f"Failed to tag playlist Opus track {file_path.name}: {e}")
 
     return {
         "album": "Custom Playlist",

@@ -107,25 +107,30 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
 
 ### 4.2 Multi-Stage Metadata & Fingerprinting (`services/metadata.py`)
 - **Stage 1 (Exact Match):** Combines bilingual artist candidates with Franco-Arabic album variations against MusicBrainz release queries (`release:"{alb}" AND artist:"{art}"`).
-- **Stage 2 (AcoustID):** If text queries return no hits and a sample MP3 exists, executes Chromaprint (`fpcalc`) via AcoustID to identify the recording and release MBID.
+- **Stage 2 (AcoustID):** If text queries return no hits and a sample audio file exists, executes Chromaprint (`fpcalc`) via AcoustID to identify the recording and release MBID.
 - **Stage 3 (Cover Art Archive):** Fetches high-resolution album jackets from `https://coverartarchive.org/release/{mbid}/front-500` (falling back to `/front`).
 - **Stage 4 (Genius Fallback):** Queries Genius for song lyrics (`USLT`), producers (`IPLS`, `TXXX:PRODUCER`), and composers/writers (`TCOM`).
+- **Latin-Canonical Artist Resolution Strategy:** Resolves consistent artist naming across releases to prevent Navidrome discography fracturing:
+  - *Tier 1 (Official Latin/English Alias):* Inspects MusicBrainz artist entity aliases (`aliases` list with `locale.startswith("en")` or `type == "Artist name"` where string `isascii()`, fetching `/ws/2/artist/{id}` if needed).
+  - *Tier 2 (Source/Input Latin Candidate):* Inspects user/source input (`fallback_artist` or input query) using `extract_clean_artists()`. Uses ASCII credit name if available.
+  - *Tier 3 (Native Script Fallback):* Falls back to native script (e.g. Arabic script) only if no Latin alias or input candidate exists.
 
-### 4.3 Duration-Tolerant Track Alignment (`services/tagger.py`)
-When tagging multi-track albums, tracks are matched using `find_best_track_match()`:
-- Computes local audio length using mutagen: `MP3(local_path).info.length`.
-- Compares duration against MusicBrainz track duration with tiered scoring:
-  - $\le 2.5$s difference: $+80$ score bonus.
-  - $\le 5.0$s difference: $+45$ score bonus.
-  - $\le 9.0$s difference: $+20$ score bonus.
-  - $> 9.0$s difference: $-25$ score penalty.
-- Token overlap score: $+40$ per matching word.
-- Candidate accepted if score $\ge 35$. Falls back to file sequence index if available, or first unassigned track.
-- **Navidrome Loose Cover:** Saves `cover.jpg` inside the folder alongside embedding the `APIC` JPEG frame into every MP3.
+### 4.3 Multi-Format Tagging & Duration-Tolerant Alignment (`services/tagger.py`)
+- **Multi-Format Engine:** Supports both `.mp3` (ID3v2.3: `TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`, `TPOS`, `TDRC`, `TCON`, `USLT`, `TCOM`, `IPLS`, `APIC`) and `.opus` (Vorbis comments: `title`, `artist`, `albumartist`, `album`, `tracknumber`, `totaltracks`, `date`, `genre`, `lyrics`, `composer`, `producer`, `metadata_block_picture`).
+- When tagging multi-track albums, tracks are matched using `find_best_track_match()`:
+  - Computes local audio length using mutagen: `MP3` or `OggOpus`.
+  - Compares duration against MusicBrainz track duration with tiered scoring:
+    - $\le 2.5$s difference: $+80$ score bonus.
+    - $\le 5.0$s difference: $+45$ score bonus.
+    - $\le 9.0$s difference: $+20$ score bonus.
+    - $> 9.0$s difference: $-25$ score penalty.
+  - Token overlap score: $+40$ per matching word.
+  - Candidate accepted if score $\ge 35$. Falls back to file sequence index if available, or first unassigned track.
+- **Navidrome Loose Cover:** Saves `cover.jpg` inside the folder alongside embedding the artwork frame into every audio track.
 
 ### 4.4 Synced Lyrics Engine (`services/lyrics.py`)
 - Queries `https://lrclib.net/api/get` (exact match) and `https://lrclib.net/api/search` (search fallback).
-- Writes a `.lrc` file with the exact same base name as the `.mp3`.
+- Writes a `.lrc` file with the exact same base name as the `.mp3` or `.opus` audio file.
 
 ### 4.5 Subsonic / Navidrome Client (`services/navidrome.py`)
 - Communicates with Navidrome's Subsonic REST API endpoint (`http://localhost:4533/rest/`).
@@ -144,8 +149,9 @@ When tagging multi-track albums, tracks are matched using `find_best_track_match
 - **Add User Flow:** Interactive `ConversationHandler` triggered via `/adduser` or inline button.
 - **Security:** Strict admin enforcement via `@auth_required` decorator and built-in protection against deleting the primary configured server admin.
 
-### 4.7 File Deletion Security (`services/system.py`)
+### 4.7 File Deletion & Folder Re-Homing Security (`services/system.py`)
 - `delete_album_folder(rel_path)` validates that `(BASE_DOWNLOAD_DIR / rel_path).resolve()` is strictly within `BASE_DOWNLOAD_DIR` using `Path.relative_to()`. This completely prevents directory traversal exploits.
+- `rehome_album_folder(folder_path, canonical_artist)` safely relocates album directories from Arabic names (e.g. `~/Music/عمرو دياب/Saharna Ya Lail`) to Latin-canonical names (e.g. `~/Music/Amr Diab/Saharna Ya Lail`), merging files safely if the target exists, and cleaning empty parent directories.
 - Automatically deletes empty parent artist directories if no other albums remain.
 
 ### 4.8 Music Request & Ingestion Queue (`handlers/request.py`)

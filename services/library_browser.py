@@ -142,10 +142,10 @@ def get_library_albums() -> List[Dict[str, Any]]:
             artist = "Unknown Artist"
             album = parts[0] if parts else "Unknown Album"
 
-        mp3_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".mp3"]
+        audio_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in (".mp3", ".opus")]
         lrc_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".lrc"]
 
-        track_count = len(mp3_files)
+        track_count = len(audio_files)
         lrc_count = len(lrc_files)
 
         has_cover = find_cover_file(folder_path) is not None
@@ -157,19 +157,31 @@ def get_library_albums() -> List[Dict[str, Any]]:
         if lrc_count > 0:
             lyrics_status = "synced"
         elif track_count > 0:
-            # Check if any MP3 has embedded USLT ID3 frame
-            has_uslt = False
-            for mp3_path in mp3_files[:3]:
-                try:
-                    from mutagen.id3 import ID3
+            # Check if any audio track has embedded lyrics
+            has_lyrics = False
+            for audio_path in audio_files[:3]:
+                f_ext = audio_path.suffix.lower()
+                if f_ext == ".mp3":
+                    try:
+                        from mutagen.id3 import ID3
 
-                    tags = ID3(str(mp3_path))
-                    if any(k.startswith("USLT") for k in tags.keys()):
-                        has_uslt = True
-                        break
-                except Exception:
-                    pass
-            if has_uslt:
+                        tags = ID3(str(audio_path))
+                        if any(k.startswith("USLT") for k in tags.keys()):
+                            has_lyrics = True
+                            break
+                    except Exception:
+                        pass
+                elif f_ext == ".opus":
+                    try:
+                        from mutagen.oggopus import OggOpus
+
+                        tags = OggOpus(str(audio_path))
+                        if "lyrics" in tags and tags["lyrics"]:
+                            has_lyrics = True
+                            break
+                    except Exception:
+                        pass
+            if has_lyrics:
                 lyrics_status = "unsynced_only"
 
         results.append(

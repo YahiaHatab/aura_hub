@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import config
+from utils.helpers import sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def get_disk_metrics(base_dir: Optional[Union[str, Path]] = None) -> Dict[str, A
 
 
 def get_album_folders(base_dir: Optional[Union[str, Path]] = None) -> List[str]:
-    """Returns sorted relative paths of all subdirectories containing MP3 audio files."""
+    """Returns sorted relative paths of all subdirectories containing MP3 or Opus audio files."""
     root_path = Path(base_dir or config.BASE_DOWNLOAD_DIR).resolve()
     folders: List[str] = []
 
@@ -68,7 +69,7 @@ def get_album_folders(base_dir: Optional[Union[str, Path]] = None) -> List[str]:
         return folders
 
     for current_dir, _, files in os.walk(str(root_path)):
-        if any(f.lower().endswith(".mp3") for f in files):
+        if any(f.lower().endswith((".mp3", ".opus")) for f in files):
             rel_path = os.path.relpath(current_dir, str(root_path))
             if rel_path != ".":
                 # Normalize slashes to forward slashes for uniform cross-platform handling
@@ -115,6 +116,100 @@ def delete_album_folder(
     except Exception as e:
         logger.exception(f"Failed to delete folder {target_path}")
         return False, f"Failed to delete directory: {e}"
+
+
+def rehome_album_folder(
+    current_folder: Union[str, Path],
+    canonical_artist: str,
+    base_dir: Optional[Union[str, Path]] = None,
+) -> Path:
+    """Safely relocates an album directory to match the Latin-Canonical artist folder.
+
+    Example:
+        Moves '~/Music/عمرو دياب/Saharna Ya Lail' -> '~/Music/Amr Diab/Saharna Ya Lail'
+        Merges files if the target destination already exists, and cleans up empty parent directories.
+    """
+    root_path = Path(base_dir or config.BASE_DOWNLOAD_DIR).resolve()
+    cur_path = Path(current_folder).resolve()
+
+    # Guard: verify cur_path is within root_path
+    try:
+        rel = cur_path.relative_to(root_path)
+    except ValueError:
+        logger.warning(f"Re-home skipped: {cur_path} is outside base directory {root_path}")
+        return cur_path
+
+    if cur_path == root_path:
+        return cur_path
+
+    clean_artist = sanitize_filename(canonical_artist.strip())
+    if not clean_artist or clean_artist.lower() in ("unknown artist", "various", "various artists"):
+        return cur_path
+
+    parts = rel.parts
+    if len(parts) >= 2:
+        current_artist_dir = parts[0]
+        album_subpath = Path(*parts[1:])
+        if current_artist_dir == clean_artist:
+            # Already in canonical artist directory
+            return cur_path
+        dest_folder = (root_path / clean_artist / album_subpath).resolve()
+    elif len(parts) == 1:
+        album_name = parts[0]
+        dest_folder = (root_path / clean_artist / album_name).resolve()
+    else:
+        return cur_path
+
+    if dest_folder == cur_path:
+        return cur_path
+
+    # Security check on destination path
+    try:
+        dest_folder.relative_to(root_path)
+    except ValueError:
+        logger.warning(f"Re-home security violation: {dest_folder} outside {root_path}")
+        return cur_path
+
+    try:
+        if dest_folder.exists():
+            logger.info(f"Target folder {dest_folder} exists; merging files from {cur_path}")
+            for item in list(cur_path.iterdir()):
+                target_item = dest_folder / item.name
+                if target_item.exists():
+                    if item.is_dir():
+                        shutil.copytree(str(item), str(target_item), dirs_exist_ok=True)
+                        shutil.rmtree(str(item))
+                    else:
+                        target_item.unlink()
+                        shutil.move(str(item), str(target_item))
+                else:
+                    shutil.move(str(item), str(target_item))
+            try:
+                cur_path.rmdir()
+            except Exception as e:
+                logger.warning(f"Could not remove source folder after merge: {e}")
+        else:
+            dest_folder.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(cur_path), str(dest_folder))
+            logger.info(f"Relocated album folder: {cur_path} -> {dest_folder}")
+
+        # Clean up empty parent artist directory
+        old_parent = cur_path.parent
+        while old_parent != root_path and old_parent.is_dir():
+            try:
+                if not any(old_parent.iterdir()):
+                    old_parent.rmdir()
+                    logger.info(f"Cleaned empty parent artist directory: {old_parent}")
+                    old_parent = old_parent.parent
+                else:
+                    break
+            except Exception:
+                break
+
+        return dest_folder
+    except Exception as e:
+        logger.exception(f"Failed to re-home album folder {cur_path} to {dest_folder}: {e}")
+        return cur_path
 
 
 def get_system_diagnostic_summary() -> str:

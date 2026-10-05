@@ -7,8 +7,19 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from config import PAGE_SIZE
+from services.metadata import (
+    _ARTIST_ALIASES_CACHE,
+    fetch_mb_artist_aliases,
+    resolve_canonical_artist,
+)
 from services.navidrome import NavidromeClient
-from services.system import delete_album_folder, get_album_folders, get_disk_metrics
+from services.system import (
+    delete_album_folder,
+    get_album_folders,
+    get_disk_metrics,
+    rehome_album_folder,
+)
+from services.tagger import tag_album_hybrid
 from utils.helpers import (
     extract_clean_artists,
     format_bytes,
@@ -340,6 +351,190 @@ class TestNowPlaying(unittest.TestCase):
         self.assertIn("Hotel California", active_card)
         self.assertIn("Eagles", active_card)
         self.assertIn("320 kbps • FLAC", active_card)
+
+
+class TestCanonicalArtistAndLibraryUnification(unittest.TestCase):
+    def setUp(self):
+        _ARTIST_ALIASES_CACHE.clear()
+
+    def test_resolve_canonical_artist_tier1_mb_alias(self):
+        # Tier 1: MusicBrainz entity has Latin/English alias
+        credits = [
+            {
+                "name": "عمرو دياب",
+                "artist": {
+                    "id": "mbid-amr",
+                    "name": "عمرو دياب",
+                    "aliases": [
+                        {"name": "Diab, Amr", "locale": "en", "type": "Artist name"},
+                        {"name": "Amr Diab", "locale": "en", "type": "Artist name", "primary": True},
+                        {"name": "عمرو عبد الباسط عبد العزيز دياب", "locale": "ar", "type": "Legal name"},
+                    ],
+                },
+            }
+        ]
+        # Should select "Amr Diab" over Arabic credit and inverted "Diab, Amr"
+        resolved = resolve_canonical_artist(credits, fallback_artist="عمرو دياب")
+        self.assertEqual(resolved, "Amr Diab")
+
+    def test_resolve_canonical_artist_tier1_fetch_remote_if_needed(self):
+        # Entity has MBID but aliases empty on credit; fetch via fetch_mb_artist_aliases
+        credits = [
+            {
+                "name": "محمد منير",
+                "artist": {
+                    "id": "mbid-mounir",
+                    "name": "محمد منير",
+                    "aliases": [],
+                },
+            }
+        ]
+        mock_aliases = [{"name": "Mohamed Mounir", "locale": "en", "type": "Artist name", "primary": True}]
+        with patch("services.metadata.fetch_mb_artist_aliases", return_value=mock_aliases):
+            resolved = resolve_canonical_artist(credits, fallback_artist="محمد منير")
+            self.assertEqual(resolved, "Mohamed Mounir")
+
+    def test_resolve_canonical_artist_tier2_source_latin_candidate(self):
+        # Tier 2: MusicBrainz has no Latin alias, but fallback_artist has Latin candidate
+        credits = [
+            {
+                "name": "عمرو دياب",
+                "artist": {
+                    "id": "",
+                    "name": "عمرو دياب",
+                    "aliases": [],
+                },
+            }
+        ]
+        # Input provides Latin name
+        resolved = resolve_canonical_artist(credits, fallback_artist="Amr Diab")
+        self.assertEqual(resolved, "Amr Diab")
+
+        # Bilingual input provides Latin name
+        resolved_bilingual = resolve_canonical_artist(credits, fallback_artist="Mohamed Mounir  محمد منير")
+        self.assertEqual(resolved_bilingual, "Mohamed Mounir")
+
+    def test_resolve_canonical_artist_tier2_ascii_credit_fallback(self):
+        # Credit name is already ASCII (e.g. Coldplay), aliases empty, input empty
+        credits = [{"name": "Coldplay", "artist": {"id": "", "name": "Coldplay", "aliases": []}}]
+        resolved = resolve_canonical_artist(credits, fallback_artist="")
+        self.assertEqual(resolved, "Coldplay")
+
+    def test_resolve_canonical_artist_tier3_native_script_fallback(self):
+        # No Latin alias in MB, and no Latin in input
+        credits = [
+            {
+                "name": "كايروكي",
+                "artist": {
+                    "id": "",
+                    "name": "كايروكي",
+                    "aliases": [{"name": "فرقة كايروكي", "locale": "ar"}],
+                },
+            }
+        ]
+        resolved = resolve_canonical_artist(credits, fallback_artist="كايروكي")
+        self.assertEqual(resolved, "كايروكي")
+
+    def test_rehome_album_folder_success_and_parent_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_path = Path(tmp_dir)
+            arabic_artist_dir = base_path / "عمرو دياب"
+            album_dir = arabic_artist_dir / "Saharna Ya Lail"
+            album_dir.mkdir(parents=True)
+            (album_dir / "01 - Track.mp3").write_text("dummy", encoding="utf-8")
+            (album_dir / "01 - Track.lrc").write_text("[00:00.00] Lyrics", encoding="utf-8")
+
+            # Re-home folder to canonical artist "Amr Diab"
+            new_folder = rehome_album_folder(album_dir, "Amr Diab", base_dir=base_path)
+
+            expected_path = base_path / "Amr Diab" / "Saharna Ya Lail"
+            self.assertEqual(new_folder, expected_path)
+            self.assertTrue((expected_path / "01 - Track.mp3").exists())
+            self.assertTrue((expected_path / "01 - Track.lrc").exists())
+
+            # Verify old album dir and empty parent artist folder were removed
+            self.assertFalse(album_dir.exists())
+            self.assertFalse(arabic_artist_dir.exists())
+
+    def test_rehome_album_folder_merge_existing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_path = Path(tmp_dir)
+            target_album_dir = base_path / "Amr Diab" / "Saharna Ya Lail"
+            target_album_dir.mkdir(parents=True)
+            (target_album_dir / "01 - Track.mp3").write_text("track 1", encoding="utf-8")
+
+            source_artist_dir = base_path / "عمرو دياب"
+            source_album_dir = source_artist_dir / "Saharna Ya Lail"
+            source_album_dir.mkdir(parents=True)
+            (source_album_dir / "02 - Track.mp3").write_text("track 2", encoding="utf-8")
+
+            new_folder = rehome_album_folder(source_album_dir, "Amr Diab", base_dir=base_path)
+            self.assertEqual(new_folder, target_album_dir)
+            self.assertTrue((target_album_dir / "01 - Track.mp3").exists())
+            self.assertTrue((target_album_dir / "02 - Track.mp3").exists())
+            self.assertFalse(source_album_dir.exists())
+            self.assertFalse(source_artist_dir.exists())
+
+    def test_rehome_album_folder_security_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_path = Path(tmp_dir)
+            outside_dir = base_path.parent / "unauthorized_folder"
+            result = rehome_album_folder(outside_dir, "Amr Diab", base_dir=base_path)
+            # Should return outside_dir unmodified without performing moves
+            self.assertEqual(result, outside_dir.resolve())
+
+    def test_multi_format_album_tagging(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            album_dir = Path(tmp_dir) / "عمرو دياب" / "Kol Hayaty"
+            album_dir.mkdir(parents=True)
+
+            # Create dummy MP3 with ID3 header
+            mp3_file = album_dir / "01 - Song.mp3"
+            mp3_file.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\x00" * 100)
+
+            # Create dummy Opus file
+            opus_file = album_dir / "02 - Song.opus"
+            opus_file.write_bytes(b"dummy opus")
+
+            mock_mb_release = {
+                "mbid": "test-mbid",
+                "title": "Kol Hayaty",
+                "artist": "Amr Diab",
+                "date": "2018",
+                "genre": "Pop",
+                "tracks": [{"position": 1, "title": "Song 1", "length": 200.0}],
+                "cover_bytes": b"fake_cover_bytes",
+            }
+
+            fake_opus_tags = {}
+            mock_opus_instance = MagicMock()
+            mock_opus_instance.__setitem__ = lambda self, k, v: fake_opus_tags.__setitem__(k, v)
+            mock_opus_instance.__getitem__ = lambda self, k: fake_opus_tags.__getitem__(k)
+            mock_opus_instance.save = MagicMock()
+
+            with patch("services.tagger.search_musicbrainz_release", return_value=mock_mb_release), \
+                 patch("services.tagger.OggOpus", return_value=mock_opus_instance), \
+                 patch("services.tagger.search_genius_album", return_value=None):
+
+                res = tag_album_hybrid(album_dir, "Kol Hayaty", "عمرو دياب")
+                self.assertEqual(res["artist"], "Amr Diab")
+                self.assertEqual(res["album"], "Kol Hayaty")
+
+                # Verify loose cover.jpg was created
+                self.assertTrue((album_dir / "cover.jpg").exists())
+
+                # Verify MP3 tags updated with Latin canonical artist
+                from mutagen.id3 import ID3
+                id3 = ID3(str(mp3_file))
+                self.assertEqual(str(id3["TPE1"].text[0]), "Amr Diab")
+                self.assertEqual(str(id3["TPE2"].text[0]), "Amr Diab")
+                self.assertEqual(str(id3["TALB"].text[0]), "Kol Hayaty")
+
+                # Verify Opus instance had tags set
+                self.assertEqual(fake_opus_tags.get("artist"), ["Amr Diab"])
+                self.assertEqual(fake_opus_tags.get("albumartist"), ["Amr Diab"])
+                self.assertEqual(fake_opus_tags.get("album"), ["Kol Hayaty"])
+                mock_opus_instance.save.assert_called()
 
 
 if __name__ == "__main__":

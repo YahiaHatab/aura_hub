@@ -111,7 +111,7 @@ async def library_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 executor, run_retag_folder, target_abs_path, "", sync_retag_updater
             )
             folder_path = Path(target_folder)
-            mp3_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
+            audio_count = len([f for f in folder_path.iterdir() if f.suffix.lower() in (".mp3", ".opus")])
             lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
 
             album_title = meta.get("album", "Album")
@@ -119,15 +119,22 @@ async def library_callback_handler(update: Update, context: ContextTypes.DEFAULT
             year = f" ({meta.get('year')})" if meta.get("year") else ""
             genre = meta.get("genre", "Music")
 
+            try:
+                display_rel_path = folder_path.relative_to(config.BASE_DOWNLOAD_DIR).as_posix()
+            except ValueError:
+                display_rel_path = folder_path.name
+
             caption = (
                 f"🏷️ *Retagged:* *{album_title}*{year}\n"
                 f"👤 *{artist}*\n"
                 f"🏷️ `{genre}`\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"✓ *Tracks:* {mp3_count} MP3s refreshed\n"
+                f"✓ *Tracks:* {audio_count} audio files refreshed\n"
                 f"✓ *Synced Lyrics:* {lrc_count} `.lrc` files active\n"
-                f"📂 *Location:* `{chosen_rel_path}`"
+                f"📂 *Location:* `{display_rel_path}`"
             )
+            if display_rel_path != chosen_rel_path:
+                caption += f"\n📁 _Unified folder from `{chosen_rel_path}`_"
 
             if navidrome_client.is_configured():
                 scan_res = navidrome_client.start_scan()

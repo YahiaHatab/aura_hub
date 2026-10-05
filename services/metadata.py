@@ -21,6 +21,120 @@ from utils.helpers import extract_clean_artists, franco_to_arabic, get_clean_nam
 logger = logging.getLogger(__name__)
 
 
+_ARTIST_ALIASES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def fetch_mb_artist_aliases(artist_mbid: str) -> List[Dict[str, Any]]:
+    """Fetches artist entity aliases from MusicBrainz REST API if not already cached."""
+    if not artist_mbid:
+        return []
+    if artist_mbid in _ARTIST_ALIASES_CACHE:
+        return _ARTIST_ALIASES_CACHE[artist_mbid]
+
+    try:
+        url = f"https://musicbrainz.org/ws/2/artist/{artist_mbid}?inc=aliases&fmt=json"
+        req = urllib.request.Request(url, headers=config.MB_HEADERS)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        aliases = data.get("aliases", [])
+        _ARTIST_ALIASES_CACHE[artist_mbid] = aliases
+        return aliases
+    except Exception as e:
+        logger.warning(f"Failed to fetch MusicBrainz aliases for artist MBID {artist_mbid}: {e}")
+        return []
+
+
+def resolve_canonical_artist(
+    artist_credits: List[Dict[str, Any]],
+    fallback_artist: str = "",
+) -> str:
+    """Resolves a Latin-Canonical artist name following a strict 3-tier cascade:
+
+    1. Tier 1 (Official Latin/English Alias in MusicBrainz):
+       - Inspect the artist's aliases (from release credit or /ws/2/artist/{id}).
+       - Find entries where locale starts with "en" OR type == "Artist name" and string is ASCII / Latin.
+       - If found (e.g. 'Amr Diab' for entity 'عمرو دياب', or 'Mohamed Mounir' for 'محمد منير'),
+         use this as the primary canonical artist name.
+
+    2. Tier 2 (Source/Input Latin Candidate):
+       - If MusicBrainz has no Latin alias, inspect fallback_artist or input query.
+       - Extract clean Latin candidates using extract_clean_artists(artist_name):
+         latin_candidates = [a for a in extract_clean_artists(artist_name) if a.isascii()]
+       - If a valid Latin name exists in the input, prefer it over raw Arabic script.
+       - If credit_name or artist_obj name itself is already ASCII, use it.
+
+    3. Tier 3 (Native Script Fallback):
+       - Only if no Latin alias or Latin input exists, accept the native script name (e.g. Arabic script).
+    """
+    credit_name = ""
+    artist_obj: Dict[str, Any] = {}
+    if artist_credits:
+        primary_credit = artist_credits[0]
+        credit_name = (primary_credit.get("name") or "").strip()
+        artist_obj = primary_credit.get("artist") or {}
+        if not credit_name and artist_obj:
+            credit_name = (artist_obj.get("name") or "").strip()
+
+    # Collect aliases: first from artist_obj in release/recording credit
+    aliases = list(artist_obj.get("aliases") or [])
+    artist_mbid = artist_obj.get("id")
+    if not aliases and artist_mbid:
+        aliases = fetch_mb_artist_aliases(artist_mbid)
+
+    # Tier 1: Official Latin/English Alias in MusicBrainz
+    latin_candidates_tier1: List[Tuple[int, str]] = []
+    for a in aliases:
+        a_name = (a.get("name") or "").strip()
+        if not a_name or not a_name.isascii():
+            continue
+        locale = (a.get("locale") or "").lower()
+        a_type = a.get("type") or ""
+        is_primary = bool(a.get("primary"))
+
+        if locale.startswith("en") or a_type == "Artist name":
+            score = 0
+            if is_primary and locale.startswith("en"):
+                score += 100
+            elif is_primary and a_type == "Artist name":
+                score += 90
+            elif locale.startswith("en") and a_type == "Artist name":
+                score += 80
+            elif locale.startswith("en"):
+                score += 70
+            elif a_type == "Artist name":
+                score += 60
+            else:
+                score += 50
+
+            # Prefer names without commas (e.g. "Amr Diab" over "Diab, Amr")
+            if "," not in a_name:
+                score += 10
+
+            latin_candidates_tier1.append((score, a_name))
+
+    if latin_candidates_tier1:
+        latin_candidates_tier1.sort(key=lambda x: x[0], reverse=True)
+        return latin_candidates_tier1[0][1]
+
+    # Tier 2: Source/Input Latin Candidate
+    input_latin_candidates = [
+        a for a in extract_clean_artists(fallback_artist) if a.isascii()
+    ]
+    if input_latin_candidates:
+        return input_latin_candidates[0]
+
+    # If the credit name or artist entity name itself is already Latin/ASCII
+    if credit_name and credit_name.isascii():
+        return credit_name
+
+    artist_obj_name = (artist_obj.get("name") or "").strip()
+    if artist_obj_name and artist_obj_name.isascii():
+        return artist_obj_name
+
+    # Tier 3: Native Script Fallback
+    return credit_name or fallback_artist.strip()
+
+
 # ---------------- ACOUSTID AUDIO FINGERPRINTING ----------------
 def get_acoustid_metadata(file_path: str) -> Optional[Dict[str, str]]:
     """Calculates Chromaprint audio fingerprint using fpcalc and resolves MusicBrainz release ID."""
@@ -39,7 +153,7 @@ def get_acoustid_metadata(file_path: str) -> Optional[Dict[str, str]]:
                 rec_id = recordings[0].get("id")
                 lookup_url = (
                     f"https://musicbrainz.org/ws/2/recording/{rec_id}?"
-                    f"inc=releases+artist-credits&fmt=json"
+                    f"inc=releases+artist-credits+aliases&fmt=json"
                 )
                 req = urllib.request.Request(lookup_url, headers=config.MB_HEADERS)
                 with urllib.request.urlopen(req, timeout=8) as r:
@@ -47,12 +161,8 @@ def get_acoustid_metadata(file_path: str) -> Optional[Dict[str, str]]:
 
                 releases = rec_data.get("releases", [])
                 if releases:
-                    artist_credit = ""
                     credits = rec_data.get("artist-credit", [])
-                    if credits:
-                        artist_credit = credits[0].get("name") or credits[0].get(
-                            "artist", {}
-                        ).get("name", "")
+                    artist_credit = resolve_canonical_artist(credits)
                     return {"release_mbid": releases[0]["id"], "artist": artist_credit}
     except Exception as e:
         logger.warning(f"AcoustID lookup failed for {file_path}: {e}")
@@ -86,7 +196,7 @@ def fetch_full_mb_release(
     try:
         lookup_url = (
             f"https://musicbrainz.org/ws/2/release/{rel_id}?"
-            f"inc=recordings+genres+tags+artist-credits&fmt=json"
+            f"inc=recordings+genres+tags+artist-credits+aliases&fmt=json"
         )
         req_details = urllib.request.Request(lookup_url, headers=config.MB_HEADERS)
         with urllib.request.urlopen(req_details, timeout=8) as resp:
@@ -117,12 +227,8 @@ def fetch_full_mb_release(
 
         cover_data = fetch_cover_art_archive(rel_id)
 
-        artist_credit = ""
         credits = full_data.get("artist-credit", [])
-        if credits:
-            artist_credit = credits[0].get("name") or credits[0].get(
-                "artist", {}
-            ).get("name", "")
+        artist_credit = resolve_canonical_artist(credits, fallback_artist)
 
         return {
             "mbid": rel_id,
@@ -241,10 +347,8 @@ def search_musicbrainz_track(title: str, artist: str = "") -> Dict[str, str]:
                     ]
                     genre_str = ", ".join(valid[:2])
 
-                artist_credit = ""
                 credits = rec.get("artist-credit", [])
-                if credits:
-                    artist_credit = credits[0].get("name", "")
+                artist_credit = resolve_canonical_artist(credits, primary_artist or artist)
 
                 return {
                     "title": rec.get("title", title),
