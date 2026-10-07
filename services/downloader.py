@@ -336,8 +336,10 @@ def run_retag_folder(
     target_folder: Union[str, Path],
     genius_raw: str = "",
     status_updater: Optional[Callable[[str], None]] = None,
+    chosen_metadata: Optional[Any] = None,
 ) -> Tuple[Path, Dict[str, Any]]:
     """Retags an existing local music directory, unifies artist folder, and downloads missing synced lyrics."""
+    import mutagen
     folder_path = Path(target_folder).resolve()
     folder_name = folder_path.name
     parent_name = folder_path.parent.name
@@ -346,9 +348,56 @@ def run_retag_folder(
     album_name = parsed["album"] if (parsed and "album" in parsed) else folder_name
     artist_name = parsed["artist"] if (parsed and "artist" in parsed) else parent_name
 
-    meta = tag_album_hybrid(
-        folder_path, album_name, artist_name, genius_raw, parsed, status_updater
-    )
+    if chosen_metadata is not None:
+        meta = tag_album_hybrid(
+            folder_path,
+            album_name,
+            artist_name,
+            genius_raw,
+            parsed,
+            status_updater,
+            chosen_metadata=chosen_metadata,
+        )
+    else:
+        # Inspect local folder tracks and durations to feed recommendation engine
+        audio_files = sorted([
+            f for f in folder_path.iterdir()
+            if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS
+        ])
+        local_durations: List[float] = []
+        for af in audio_files:
+            try:
+                mut = mutagen.File(str(af))
+                if mut and getattr(mut, "info", None) and hasattr(mut.info, "length"):
+                    local_durations.append(float(mut.info.length))
+            except Exception:
+                pass
+
+        if status_updater:
+            status_updater("🔎 `[1/4]` *Querying metadata providers (iTunes, MusicBrainz, Deezer)...*")
+
+        from services.metadata import search_album_metadata_candidates
+
+        candidates = search_album_metadata_candidates(
+            album_name,
+            artist_name,
+            local_track_count=len(audio_files),
+            local_durations=local_durations,
+        )
+
+        selected_cand = None
+        if candidates and candidates[0].confidence_score >= 40.0:
+            selected_cand = candidates[0].album_data
+
+        meta = tag_album_hybrid(
+            folder_path,
+            album_name,
+            artist_name,
+            genius_raw,
+            parsed,
+            status_updater,
+            chosen_metadata=selected_cand,
+        )
 
     # Re-home folder if canonical artist differs from directory
     effective_artist = meta.get("artist") or ""
@@ -360,3 +409,4 @@ def run_retag_folder(
     sync_all_lrc_in_folder(folder_path)
 
     return folder_path, meta
+

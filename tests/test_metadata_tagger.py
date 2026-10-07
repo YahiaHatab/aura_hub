@@ -151,6 +151,46 @@ class TestMetadataModelsAndScoring(unittest.TestCase):
         self.assertTrue(ranked[0].is_recommended)
         self.assertFalse(ranked[1].is_recommended)
 
+    def test_arabic_genre_resolution(self):
+        from utils.helpers import is_arabic_music, resolve_fallback_genre
+        self.assertTrue(is_arabic_music("Elissa", "Saharna Ya Leil"))
+        self.assertTrue(is_arabic_music("Amr Diab", "Kol Hayaty"))
+        self.assertTrue(is_arabic_music("إليسا", "سهرنا يا ليل"))
+        self.assertFalse(is_arabic_music("Coldplay", "Parachutes"))
+
+        # Never return 'Music'
+        self.assertEqual(resolve_fallback_genre("Elissa", "Saharna Ya Leil", "Music"), "Arabic Pop")
+        self.assertEqual(resolve_fallback_genre("Elissa", "Saharna Ya Leil", ""), "Arabic Pop")
+        self.assertEqual(resolve_fallback_genre("Amr Diab", "Wayah", None), "Arabic Pop")
+        self.assertEqual(resolve_fallback_genre("Coldplay", "Yellow", "Music"), "Pop")
+        self.assertEqual(resolve_fallback_genre("Coldplay", "Yellow", "Alternative Rock"), "Alternative Rock")
+
+    def test_track_global_alignment_order_inversion(self):
+        from services.tagger import align_album_tracks_globally
+        # Emulate Saharna Ya Leil where CD sequence and digital release sequence differ
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            f1 = Path(tmp_dir) / "01 - Aaks Elli Shayfenha.mp3"
+            f1.write_bytes(b"ID3" + b"\x00" * 50)
+            f2 = Path(tmp_dir) / "02 - Maktooba Leek.mp3"
+            f2.write_bytes(b"ID3" + b"\x00" * 50)
+            f3 = Path(tmp_dir) / "03 - Saharna Ya Leil.mp3"
+            f3.write_bytes(b"ID3" + b"\x00" * 50)
+
+            # Candidate tracklist where track 1 is Saharna Ya Leil, track 2 is Maktooba Leek, track 3 is Aaks Elli Shayfenha
+            candidate_tracks = [
+                UnifiedTrackMetadata(title="Saharna Ya Leil", track_number=1, duration_seconds=258),
+                UnifiedTrackMetadata(title="Maktooba Leek", track_number=2, duration_seconds=312),
+                UnifiedTrackMetadata(title="Aaks Elli Shayfenha", track_number=3, duration_seconds=265),
+            ]
+
+            aligned = align_album_tracks_globally([f1, f2, f3], candidate_tracks)
+            matched_dict = {p.name: t.title for p, t in aligned}
+
+            # File 01 should match "Aaks Elli Shayfenha" despite file index 1 vs track 3
+            self.assertEqual(matched_dict["01 - Aaks Elli Shayfenha.mp3"], "Aaks Elli Shayfenha")
+            self.assertEqual(matched_dict["02 - Maktooba Leek.mp3"], "Maktooba Leek")
+            self.assertEqual(matched_dict["03 - Saharna Ya Leil.mp3"], "Saharna Ya Leil")
+
 
 class TestProvidersMocked(unittest.IsolatedAsyncioTestCase):
     async def test_deezer_album_search_mock(self):

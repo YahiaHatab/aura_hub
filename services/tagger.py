@@ -47,13 +47,21 @@ from services.lyrics import fetch_and_save_lrc
 from services.metadata import (
     UnifiedAlbumMetadata,
     UnifiedTrackMetadata,
+    calculate_best_variant_similarity,
+    calculate_string_similarity,
     fetch_image_bytes_async,
     get_genius_client,
     search_genius_album,
     search_musicbrainz_release,
     search_musicbrainz_track,
 )
-from utils.helpers import extract_clean_artists, franco_to_arabic, get_clean_name
+from utils.helpers import (
+    extract_clean_artists,
+    franco_to_arabic,
+    get_clean_name,
+    is_arabic_music,
+    resolve_fallback_genre,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -474,61 +482,26 @@ def apply_unified_metadata_to_album(
     if status_updater:
         status_updater("⚡ `[3/4]` *Writing audio tags across tracks...*")
 
-    # Match files with tracklist using duration tolerance
-    cand_tracks_dict = [
-        {
-            "position": t.track_number,
-            "title": t.title,
-            "length": t.duration_seconds,
-            "track_obj": t,
-        }
-        for t in album.tracks
-    ]
-    assigned_positions: Set[int] = set()
+    effective_genre = resolve_fallback_genre(album.artist, album.album, album.genre)
+    aligned_pairs = align_album_tracks_globally(files, album.tracks)
 
-    for idx_file, file_path in enumerate(files, 1):
-        num_match = re.match(r"^(\d+)\s*[-.]\s*(.*)", file_path.stem)
-        if num_match:
-            file_seq = int(num_match.group(1))
-            local_title = num_match.group(2).strip()
-        else:
-            file_seq = idx_file
-            local_title = file_path.stem
-
-        matched_title, matched_pos = find_best_track_match(
-            file_path, local_title, file_seq, cand_tracks_dict, assigned_positions
-        )
-
-        matched_track = next((t["track_obj"] for t in cand_tracks_dict if t["position"] == matched_pos), None)
-        if not matched_track:
-            matched_track = UnifiedTrackMetadata(
-                title=matched_title,
-                artist=album.artist,
-                album_artist=album.album_artist or album.artist,
-                album=album.album,
-                track_number=matched_pos,
-                total_tracks=album.total_tracks or len(files),
-                year=album.year,
-                genre=album.genre,
-                genres=album.genres,
-                producers=album.producers,
-                composers=album.composers,
-            )
-        else:
-            if not matched_track.album:
-                matched_track.album = album.album
-            if not matched_track.artist:
-                matched_track.artist = album.artist
-            if not matched_track.total_tracks:
-                matched_track.total_tracks = album.total_tracks or len(files)
-            if not matched_track.year:
-                matched_track.year = album.year
-            if not matched_track.genre:
-                matched_track.genre = album.genre
-            if not matched_track.producers and album.producers:
-                matched_track.producers = album.producers
-            if not matched_track.composers and album.composers:
-                matched_track.composers = album.composers
+    for file_path, matched_track in aligned_pairs:
+        if not matched_track.album:
+            matched_track.album = album.album
+        if not matched_track.artist:
+            matched_track.artist = album.artist
+        if not matched_track.album_artist:
+            matched_track.album_artist = album.album_artist or album.artist
+        if not matched_track.total_tracks:
+            matched_track.total_tracks = album.total_tracks or len(files)
+        if not matched_track.year:
+            matched_track.year = album.year
+        if not matched_track.genre:
+            matched_track.genre = effective_genre
+        if not matched_track.producers and album.producers:
+            matched_track.producers = album.producers
+        if not matched_track.composers and album.composers:
+            matched_track.composers = album.composers
 
         apply_unified_metadata_to_file(file_path, matched_track, cover_bytes)
 
@@ -546,9 +519,135 @@ def apply_unified_metadata_to_album(
         "album": album.album,
         "artist": album.artist,
         "year": album.year,
-        "genre": album.genre or "Music",
+        "genre": effective_genre,
         "cover_bytes": cover_bytes,
     }
+
+
+def align_album_tracks_globally(
+    files: List[Path],
+    candidate_tracks: List[UnifiedTrackMetadata],
+) -> List[Tuple[Path, UnifiedTrackMetadata]]:
+    """Optimally matches audio files to candidate tracks globally across duration, title, and position.
+
+    Eliminates greedy track starvation, index inversion, and track order shuffling.
+    """
+    if not candidate_tracks:
+        return [(f, UnifiedTrackMetadata(title=f.stem, track_number=idx)) for idx, f in enumerate(files, 1)]
+
+    # 1. Extract file features
+    file_features = []
+    for idx_f, f in enumerate(files, 1):
+        num_match = re.match(r"^(\d+)\s*[-.]\s*(.*)", f.stem)
+        seq = int(num_match.group(1)) if num_match else idx_f
+        raw_title = num_match.group(2).strip() if num_match else f.stem
+
+        dur = 0.0
+        existing_title = raw_title
+        try:
+            af = mutagen.File(str(f))
+            if af and getattr(af, "info", None) and hasattr(af.info, "length"):
+                dur = float(af.info.length)
+            if af:
+                if "TIT2" in af and af["TIT2"].text:
+                    existing_title = str(af["TIT2"].text[0])
+                elif "title" in af and af["title"]:
+                    existing_title = str(af["title"][0])
+                elif "\xa9nam" in af and af["\xa9nam"]:
+                    existing_title = str(af["\xa9nam"][0])
+        except Exception:
+            pass
+
+        file_features.append({
+            "path": f,
+            "seq": seq,
+            "raw_title": raw_title,
+            "tagged_title": existing_title,
+            "duration": dur,
+        })
+
+    # 2. Build full pair score matrix
+    all_pairs: List[Tuple[float, int, int]] = []
+    for i, f_feat in enumerate(file_features):
+        for j, c_trk in enumerate(candidate_tracks):
+            score = 0.0
+
+            # A. Duration proximity scoring
+            if f_feat["duration"] > 0 and c_trk.duration_seconds > 0:
+                diff = abs(f_feat["duration"] - c_trk.duration_seconds)
+                if diff <= 2.5:
+                    score += 120.0
+                elif diff <= 5.0:
+                    score += 80.0
+                elif diff <= 9.0:
+                    score += 40.0
+                elif diff <= 15.0:
+                    score += 10.0
+                else:
+                    score -= 40.0
+
+            # B. Title & phonetic similarity scoring
+            title_sim = max(
+                calculate_string_similarity(f_feat["raw_title"], c_trk.title),
+                calculate_string_similarity(f_feat["tagged_title"], c_trk.title),
+                calculate_best_variant_similarity(franco_to_arabic(f_feat["raw_title"]), c_trk.title),
+                calculate_best_variant_similarity(franco_to_arabic(f_feat["tagged_title"]), c_trk.title),
+            )
+            if title_sim >= 0.75:
+                score += 120.0 * title_sim
+            elif title_sim >= 0.45:
+                score += 80.0 * title_sim
+            elif title_sim >= 0.2:
+                score += 30.0 * title_sim
+
+            # C. Sequence position bonus
+            if f_feat["seq"] == c_trk.track_number:
+                if score > 0:
+                    score += 60.0
+                else:
+                    score += 35.0
+
+            all_pairs.append((score, i, j))
+
+    # 3. Sort pairs descending and greedily match without conflict
+    all_pairs.sort(key=lambda x: x[0], reverse=True)
+    assigned_files: Set[int] = set()
+    assigned_tracks: Set[int] = set()
+    matches: Dict[int, int] = {}
+
+    for score, i, j in all_pairs:
+        if score < 25.0:
+            break
+        if i not in assigned_files and j not in assigned_tracks:
+            assigned_files.add(i)
+            assigned_tracks.add(j)
+            matches[i] = j
+
+    # 4. Fallback for unassigned files (assign to remaining tracks in sequence)
+    unassigned_track_indices = [j for j in range(len(candidate_tracks)) if j not in assigned_tracks]
+    for i in range(len(file_features)):
+        if i not in matches:
+            if unassigned_track_indices:
+                j = unassigned_track_indices.pop(0)
+                matches[i] = j
+            else:
+                matches[i] = None
+
+    # 5. Format results
+    aligned: List[Tuple[Path, UnifiedTrackMetadata]] = []
+    for i, f_feat in enumerate(file_features):
+        j = matches.get(i)
+        if j is not None and j < len(candidate_tracks):
+            aligned.append((f_feat["path"], candidate_tracks[j]))
+        else:
+            fallback_track = UnifiedTrackMetadata(
+                title=f_feat["raw_title"],
+                track_number=f_feat["seq"],
+                total_tracks=len(files),
+            )
+            aligned.append((f_feat["path"], fallback_track))
+
+    return aligned
 
 
 # =====================================================================
@@ -635,6 +734,9 @@ def tag_album_hybrid(
     assigned_positions: Set[int] = set()
     mb_tracklist = mb_data.get("tracks", []) if mb_data else []
 
+    mb_genre = mb_data.get("genre") if mb_data else None
+    effective_genre = resolve_fallback_genre(effective_artist, resolved_album, mb_genre)
+
     for idx_file, file_path in enumerate(files, 1):
         num_match = re.match(r"^(\d+)\s*[-.]\s*(.*)", file_path.stem)
         if num_match:
@@ -708,9 +810,9 @@ def tag_album_hybrid(
                 audio.delall("TDRC")
                 audio.add(TDRC(encoding=3, text=str(mb_data["date"])))
 
-            if mb_data and mb_data.get("genre"):
+            if effective_genre:
                 audio.delall("TCON")
-                audio.add(TCON(encoding=3, text=mb_data["genre"]))
+                audio.add(TCON(encoding=3, text=effective_genre))
 
             if lyrics_text:
                 audio.delall("USLT")
@@ -758,8 +860,8 @@ def tag_album_hybrid(
                 if mb_data and mb_data.get("date"):
                     audio["date"] = [str(mb_data["date"])]
 
-                if mb_data and mb_data.get("genre"):
-                    audio["genre"] = [mb_data["genre"]]
+                if effective_genre:
+                    audio["genre"] = [effective_genre]
 
                 if lyrics_text:
                     audio["lyrics"] = [lyrics_text]
@@ -803,8 +905,8 @@ def tag_album_hybrid(
                 if mb_data and mb_data.get("date"):
                     audio["date"] = [str(mb_data["date"])]
 
-                if mb_data and mb_data.get("genre"):
-                    audio["genre"] = [mb_data["genre"]]
+                if effective_genre:
+                    audio["genre"] = [effective_genre]
 
                 if lyrics_text:
                     audio["lyrics"] = [lyrics_text]
@@ -845,8 +947,8 @@ def tag_album_hybrid(
                 if mb_data and mb_data.get("date"):
                     audio["\xa9day"] = [str(mb_data["date"])]
 
-                if mb_data and mb_data.get("genre"):
-                    audio["\xa9gen"] = [mb_data["genre"]]
+                if effective_genre:
+                    audio["\xa9gen"] = [effective_genre]
 
                 if lyrics_text:
                     audio["\xa9lyr"] = [lyrics_text]
@@ -870,9 +972,10 @@ def tag_album_hybrid(
         "album": resolved_album,
         "artist": effective_artist,
         "year": (mb_data.get("date") if mb_data else None) or "",
-        "genre": (mb_data.get("genre") if mb_data else None) or "Music",
+        "genre": effective_genre,
         "cover_bytes": cover_bytes,
     }
+
 
 
 def tag_playlist_hybrid(

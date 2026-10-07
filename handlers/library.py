@@ -13,6 +13,7 @@ from handlers.common import admin_required, is_admin
 from services.downloader import executor, run_retag_folder
 from services.navidrome import navidrome_client
 from services.system import delete_album_folder, get_album_folders
+from utils.helpers import resolve_fallback_genre
 from utils.keyboards import build_confirmation_keyboard, build_folder_keyboard
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ async def library_callback_handler(update: Update, context: ContextTypes.DEFAULT
             album_title = meta.get("album", "Album")
             artist = meta.get("artist", "Artist")
             year = f" ({meta.get('year')})" if meta.get("year") else ""
-            genre = meta.get("genre", "Music")
+            genre = resolve_fallback_genre(artist, album_title, meta.get("genre"))
 
             try:
                 display_rel_path = folder_path.relative_to(config.BASE_DOWNLOAD_DIR).as_posix()

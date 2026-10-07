@@ -20,6 +20,7 @@ from handlers.common import admin_required, auth_required, is_admin
 from services.downloader import executor, run_pipeline, run_youtube_search
 from services.navidrome import navidrome_client
 from services.settings import get_quality_preference, parse_quality_flag
+from utils.helpers import resolve_fallback_genre
 from utils.keyboards import build_search_results_keyboard
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ async def execute_task(
         album_title = meta.get("album", "Album")
         artist = meta.get("artist", "Artist")
         year = f" ({meta.get('year')})" if meta.get("year") else ""
-        genre = meta.get("genre", "Music")
+        genre = resolve_fallback_genre(artist, album_title, meta.get("genre"))
 
         track_summary = f"{custom_title}\n" if custom_title else ""
         caption = (
@@ -308,7 +309,7 @@ async def search_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         album_title = meta.get("album", "Album")
         artist = meta.get("artist", "Artist")
         year = f" ({meta.get('year')})" if meta.get("year") else ""
-        genre = meta.get("genre", "Music")
+        genre = resolve_fallback_genre(artist, album_title, meta.get("genre"))
 
         caption = (
             f"💿 *{album_title}*{year}\n"

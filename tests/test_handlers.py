@@ -3,7 +3,7 @@
 import unittest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, MessageHandler
 
-from handlers import common, download, library, navidrome, nowplaying, request, settings, system, users
+from handlers import common, download, library, metadata, navidrome, nowplaying, request, settings, system, users
 from main import build_application
 
 
@@ -12,6 +12,7 @@ class TestHandlersAndApplication(unittest.TestCase):
         self.assertGreater(len(common.router), 0)
         self.assertGreater(len(download.router), 0)
         self.assertGreater(len(library.router), 0)
+        self.assertGreater(len(metadata.router), 0)
         self.assertGreater(len(navidrome.router), 0)
         self.assertGreater(len(nowplaying.router), 0)
         self.assertGreater(len(request.router), 0)
@@ -51,6 +52,8 @@ class TestHandlersAndApplication(unittest.TestCase):
             "download",
             "genius",
             "search",
+            "metadata",
+            "meta",
             "retag",
             "delete",
             "remove",

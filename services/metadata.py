@@ -34,7 +34,13 @@ import httpx
 import lyricsgenius
 
 import config
-from utils.helpers import extract_clean_artists, franco_to_arabic, get_clean_name
+from utils.helpers import (
+    extract_clean_artists,
+    franco_to_arabic,
+    get_clean_name,
+    is_arabic_music,
+    resolve_fallback_genre,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -461,12 +467,18 @@ def fetch_full_mb_release(
         credits = full_data.get("artist-credit", [])
         artist_credit = resolve_canonical_artist(credits, fallback_artist)
 
+        effective_genre = resolve_fallback_genre(
+            artist_credit or fallback_artist, fallback_title, genre_str
+        )
+        if not genre_list and effective_genre:
+            genre_list = [effective_genre]
+
         return {
             "mbid": rel_id,
             "title": full_data.get("title", fallback_title),
             "artist": artist_credit or fallback_artist,
             "date": full_data.get("date", ""),
-            "genre": genre_str,
+            "genre": effective_genre,
             "genres": genre_list,
             "producers": rel_prods,
             "composers": rel_comps,
@@ -583,11 +595,14 @@ def search_musicbrainz_track(title: str, artist: str = "") -> Dict[str, str]:
 
                 credits = rec.get("artist-credit", [])
                 artist_credit = resolve_canonical_artist(credits, primary_artist or artist)
+                eff_genre = resolve_fallback_genre(
+                    artist_credit or primary_artist or artist, title, genre_str
+                )
 
                 return {
                     "title": rec.get("title", title),
                     "artist": artist_credit or primary_artist or artist,
-                    "genre": genre_str,
+                    "genre": eff_genre,
                 }
     except Exception as e:
         logger.warning(f"MusicBrainz track lookup failed for '{title}': {e}")
@@ -804,14 +819,19 @@ class DeezerProvider:
                         )
 
                     cover_url = detail.get("cover_xl") or detail.get("cover_big") or ""
+                    dz_genre = resolve_fallback_genre(
+                        detail.get("artist", {}).get("name", artist),
+                        detail.get("title", album),
+                        ", ".join(genre_list[:2]),
+                    )
                     results.append(
                         UnifiedAlbumMetadata(
                             album=detail.get("title", album),
                             artist=detail.get("artist", {}).get("name", artist),
                             album_artist=detail.get("artist", {}).get("name", artist),
                             year=str(detail.get("release_date", "")),
-                            genre=", ".join(genre_list[:2]),
-                            genres=genre_list,
+                            genre=dz_genre,
+                            genres=genre_list or [dz_genre],
                             total_tracks=int(detail.get("nb_tracks", len(tracks))),
                             cover_url=cover_url,
                             tracks=tracks,
@@ -907,14 +927,19 @@ class ITunesProvider:
                             )
                         )
 
+                    itunes_genre = resolve_fallback_genre(
+                        item.get("artistName", artist),
+                        item.get("collectionName", album),
+                        item.get("primaryGenreName", ""),
+                    )
                     results.append(
                         UnifiedAlbumMetadata(
                             album=item.get("collectionName", album),
                             artist=item.get("artistName", artist),
                             album_artist=item.get("artistName", artist),
                             year=str(item.get("releaseDate", ""))[:10],
-                            genre=item.get("primaryGenreName", ""),
-                            genres=[item.get("primaryGenreName")] if item.get("primaryGenreName") else [],
+                            genre=itunes_genre,
+                            genres=[itunes_genre] if itunes_genre else [],
                             total_tracks=int(item.get("trackCount", len(tracks))),
                             cover_url=highres_cover,
                             tracks=tracks,

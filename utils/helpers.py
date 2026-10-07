@@ -191,3 +191,38 @@ def format_bytes(size_bytes: int | float) -> str:
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} PB"
+
+
+def is_arabic_music(artist: str = "", album: str = "", text: str = "") -> bool:
+    """Detects if artist/album or text corresponds to Arabic music."""
+    combined = f"{artist} {album} {text}".strip()
+    if not combined:
+        return False
+    # Arabic script characters
+    if re.search(r"[\u0600-\u06FF]", combined):
+        return True
+    # Common Arabic artist tokens in Latin/Franco script
+    known_arabic_tokens = {
+        "elissa", "amr diab", "mohamed mounir", "cairokee", "hamaki", "tamer hosny",
+        "nancy ajram", "sherine", "angham", "fairuz", "fayrouz", "umm kulthum",
+        "om kalthoum", "abdel halim", "hafez", "mohamed abdo", "assala", "ragheb alama",
+        "george wassouf", "wael kfoury", "marwan pablo", "wegz", "marwan moussa",
+        "abyusif", "shabjdeed", "al shami", "esseily", "balqees", "jassmi", "kadim",
+        "saber rebai", "cheb khaled", "cheb mami", "saad lamjarred", "asma lmnawar",
+        "ziad rahbani", "haifa wehbe", "myriam fares", "carole samaha", "nawal el zoghbi",
+        "fadl shaker", "majed al mohandis", "mahmoud el esseily", "ahmed saad", "rotana",
+        "mazzika", "leil", "lail", "saharna", "habibi", "7abibi", "kol hayaty"
+    }
+    low = combined.lower()
+    return any(tok in low for tok in known_arabic_tokens)
+
+
+def resolve_fallback_genre(artist: str = "", album: str = "", default: str = "") -> str:
+    """Returns an authentic genre when providers return empty or generic 'Music'."""
+    cand = (default or "").strip()
+    if cand and cand.lower() not in ("music", "all", "unknown", "other", "soundtrack", "various"):
+        return cand
+    if is_arabic_music(artist, album):
+        return "Arabic Pop"
+    return "Pop"
+
