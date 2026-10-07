@@ -218,7 +218,7 @@ def run_pipeline(
         # Validate that audio files were generated
         audio_files = [
             f for f in target_folder.iterdir()
-            if f.is_file() and f.suffix.lower() in (".flac", ".opus", ".mp3")
+            if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS
         ]
         if not audio_files:
             raise RuntimeError(f"No audio files found in destination folder: {target_folder}")

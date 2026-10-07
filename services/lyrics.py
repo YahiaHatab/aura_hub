@@ -70,7 +70,7 @@ def fetch_and_save_lrc(
 
 
 def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
-    """Scans all MP3 and Opus files in a directory and fetches missing .lrc companion files.
+    """Scans all audio files matching AUDIO_EXTENSIONS in a directory and fetches missing .lrc companion files.
 
     Returns the total number of synced .lrc files present in the folder.
     """
@@ -80,11 +80,11 @@ def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
 
     audio_files = [
         f for f in folder_path.iterdir()
-        if f.suffix.lower() in (".mp3", ".opus", ".flac")
+        if f.is_file() and f.name.lower().endswith(config.AUDIO_EXTENSIONS)
     ]
 
     for audio_path in audio_files:
-        lrc_path = audio_path.with_suffix(".lrc")
+        lrc_path = Path(os.path.splitext(str(audio_path))[0] + ".lrc")
         if lrc_path.exists():
             continue
 
@@ -115,6 +115,15 @@ def sync_all_lrc_in_folder(folder: Union[str, Path]) -> int:
                 audio = FLAC(str(audio_path))
                 title = audio.get("title", [""])[0]
                 artist = audio.get("artist", [""])[0]
+            except Exception:
+                pass
+        elif f_ext == ".m4a":
+            try:
+                from mutagen.mp4 import MP4
+
+                audio = MP4(str(audio_path))
+                title = audio.get("\xa9nam", [""])[0] if audio.get("\xa9nam") else ""
+                artist = audio.get("\xa9ART", [""])[0] if audio.get("\xa9ART") else ""
             except Exception:
                 pass
 

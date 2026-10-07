@@ -276,8 +276,8 @@ async def approve_callback_handler(update: Update, context: ContextTypes.DEFAULT
         req["status"] = "completed"
         persist_status(req_id, "COMPLETED", admin_name=admin_name)
         folder_path = Path(target_folder)
-        mp3_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
-        lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
+        audio_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS])
+        lrc_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".lrc"])
 
         album_title = meta.get("album", "Album")
         artist = meta.get("artist", "Artist")
@@ -302,7 +302,7 @@ async def approve_callback_handler(update: Update, context: ContextTypes.DEFAULT
             f"👤 *{artist}*\n"
             f"🏷️ `{genre}`\n"
             f"{track_summary}"
-            f"✓ *Tracks:* {mp3_count} MP3s tagged\n"
+            f"✓ *Tracks:* {audio_count} audio tracks tagged\n"
             f"✓ *Synced Lyrics:* {lrc_count} `.lrc` files attached\n"
             f"📂 *Location:* `{folder_path.name}`"
             f"{rescan_note}"

@@ -135,9 +135,43 @@ class TestSystemServices(unittest.TestCase):
         self.assertEqual(folders[0], "Artist One/Album One")
 
         metrics = get_disk_metrics(self.base_path)
+        self.assertEqual(metrics["audio_count"], 1)
         self.assertEqual(metrics["mp3_count"], 1)
         self.assertEqual(metrics["lrc_count"], 1)
         self.assertGreater(metrics["total_gb"], 0)
+
+    def test_universal_audio_extensions_indexing(self):
+        # Create folders containing FLAC, Opus, M4A, and MP3
+        flac_album = self.base_path / "Artist Flac" / "Flac Album"
+        flac_album.mkdir(parents=True)
+        (flac_album / "01 - Track.flac").write_text("flac", encoding="utf-8")
+
+        opus_album = self.base_path / "Artist Opus" / "Opus Album"
+        opus_album.mkdir(parents=True)
+        (opus_album / "01 - Track.opus").write_text("opus", encoding="utf-8")
+
+        m4a_album = self.base_path / "Artist M4A" / "M4A Album"
+        m4a_album.mkdir(parents=True)
+        (m4a_album / "01 - Track.m4a").write_text("m4a", encoding="utf-8")
+
+        # Hidden folder should be ignored
+        hidden_album = self.base_path / ".cache" / "Hidden Album"
+        hidden_album.mkdir(parents=True)
+        (hidden_album / "01 - Track.flac").write_text("hidden", encoding="utf-8")
+
+        # Non-audio folder should be ignored
+        txt_album = self.base_path / "Artist Docs" / "Docs Album"
+        txt_album.mkdir(parents=True)
+        (txt_album / "notes.txt").write_text("notes", encoding="utf-8")
+
+        folders = get_album_folders(self.base_path)
+        self.assertEqual(len(folders), 3)
+        self.assertIn("Artist Flac/Flac Album", folders)
+        self.assertIn("Artist Opus/Opus Album", folders)
+        self.assertIn("Artist M4A/M4A Album", folders)
+
+        metrics = get_disk_metrics(self.base_path)
+        self.assertEqual(metrics["audio_count"], 3)
 
     def test_delete_album_folder_security_and_cleanup(self):
         # Create dummy album and empty artist parent
@@ -784,7 +818,77 @@ class TestDownloaderRouting(unittest.TestCase):
                 self.assertEqual(call_args[fmt_idx + 1], "mp3")
 
 
+class TestUniversalAudioServices(unittest.TestCase):
+    def test_sync_all_lrc_scans_all_supported_extensions(self):
+        from services.lyrics import sync_all_lrc_in_folder
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            folder = Path(tmp_dir)
+            (folder / "Artist - Song1.flac").write_text("dummy", encoding="utf-8")
+            (folder / "Artist - Song2.opus").write_text("dummy", encoding="utf-8")
+            (folder / "Artist - Song3.m4a").write_text("dummy", encoding="utf-8")
+            (folder / "Artist - Song4.mp3").write_text("dummy", encoding="utf-8")
+
+            with patch("services.lyrics.fetch_and_save_lrc") as mock_fetch:
+                def fake_save(title, artist, target_lrc):
+                    Path(target_lrc).write_text("[00:00.00] test", encoding="utf-8")
+                    return True
+
+                mock_fetch.side_effect = fake_save
+                total_lrc = sync_all_lrc_in_folder(folder)
+
+                self.assertEqual(mock_fetch.call_count, 4)
+                self.assertEqual(total_lrc, 4)
+                self.assertTrue((folder / "Artist - Song1.lrc").exists())
+                self.assertTrue((folder / "Artist - Song2.lrc").exists())
+                self.assertTrue((folder / "Artist - Song3.lrc").exists())
+                self.assertTrue((folder / "Artist - Song4.lrc").exists())
+
+    def test_find_best_track_match_duration_tolerance(self):
+        from services.tagger import find_best_track_match
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            track_file = Path(tmp_dir) / "01 - My Track.flac"
+            track_file.write_text("dummy", encoding="utf-8")
+
+            mb_tracks = [
+                {"title": "My Track", "position": 1, "length": 210.0},
+                {"title": "Other Track", "position": 2, "length": 180.0},
+            ]
+            assigned = set()
+
+            mock_audio = MagicMock()
+            mock_audio.info.length = 211.5  # diff 1.5s <= 2.5s gives +80 duration bonus
+
+            with patch("mutagen.File", return_value=mock_audio):
+                title, pos = find_best_track_match(track_file, "My Track", 1, mb_tracks, assigned)
+                self.assertEqual(title, "My Track")
+                self.assertEqual(pos, 1)
+
+    def test_library_albums_multi_format_counting(self):
+        from services.library_browser import get_library_albums
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_path = Path(tmp_dir)
+            album_dir = base_path / "Cool Artist" / "Mixed Album"
+            album_dir.mkdir(parents=True)
+
+            (album_dir / "01 - S1.flac").write_text("dummy", encoding="utf-8")
+            (album_dir / "02 - S2.opus").write_text("dummy", encoding="utf-8")
+            (album_dir / "03 - S3.m4a").write_text("dummy", encoding="utf-8")
+            (album_dir / "04 - S4.mp3").write_text("dummy", encoding="utf-8")
+            (album_dir / "01 - S1.lrc").write_text("[00:00.00] L1", encoding="utf-8")
+
+            with patch("config.BASE_DOWNLOAD_DIR", base_path):
+                albums = get_library_albums()
+                self.assertEqual(len(albums), 1)
+                self.assertEqual(albums[0]["track_count"], 4)
+                self.assertEqual(albums[0]["lrc_count"], 1)
+                self.assertEqual(albums[0]["lyrics_status"], "synced")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

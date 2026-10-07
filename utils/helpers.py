@@ -4,6 +4,8 @@ import re
 import urllib.parse
 from typing import Any, Dict, List, Optional
 
+from config import AUDIO_EXTENSIONS
+
 
 def get_clean_name(name: str) -> str:
     """Strips leading track numbers and punctuation for clean token matching."""

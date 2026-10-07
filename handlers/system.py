@@ -21,7 +21,7 @@ async def storage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_gb = metrics["total_gb"]
     free_gb = metrics["free_gb"]
     pct = metrics["pct_used"]
-    mp3_count = metrics["mp3_count"]
+    audio_count = metrics.get("audio_count", metrics.get("mp3_count", 0))
     lrc_count = metrics["lrc_count"]
     base_dir = metrics["base_dir"]
 
@@ -30,7 +30,7 @@ async def storage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• *Disk Usage:* `{used_gb:.1f} GB` / `{total_gb:.1f} GB` ({pct:.1f}%)\n"
         f"• *Free Disk Space:* `{free_gb:.1f} GB`\n"
         f"• *Music Directory:* `{base_dir}`\n"
-        f"• *Audio Files:* `{mp3_count}` MP3s indexed\n"
+        f"• *Audio Files:* `{audio_count}` audio tracks indexed\n"
         f"• *Synced Lyrics:* `{lrc_count}` `.lrc` companion files"
     )
     await update.effective_message.reply_markdown(msg)

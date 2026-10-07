@@ -511,29 +511,20 @@ async def get_system_api(admin_user: Dict[str, Any] = Depends(verify_admin_user)
         disk = get_disk_metrics()
         diagnostics = get_system_diagnostic_summary()
 
-        # Count indexed mp3 and lrc files safely
-        mp3_count = 0
-        lrc_count = 0
-        if config.BASE_DOWNLOAD_DIR.is_dir():
-            for p in config.BASE_DOWNLOAD_DIR.rglob("*"):
-                if p.is_file():
-                    s = p.suffix.lower()
-                    if s == ".mp3":
-                        mp3_count += 1
-                    elif s == ".lrc":
-                        lrc_count += 1
-
+        audio_count = disk.get("audio_count", disk.get("mp3_count", 0))
+        lrc_count = disk.get("lrc_count", 0)
         folders = get_album_folders()
 
         return {
             "ok": True,
             "disk": disk,
-            "mp3_count": mp3_count,
+            "audio_count": audio_count,
+            "mp3_count": audio_count,
             "lrc_count": lrc_count,
             "album_count": len(folders),
             "diagnostics": diagnostics,
             "navidrome_connected": navidrome_client.is_configured(),
-        }
+}
 
     data = await loop.run_in_executor(None, _collect)
     return data

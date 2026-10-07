@@ -31,8 +31,10 @@ from mutagen.id3 import (
     ID3NoHeaderError,
 )
 from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 
+import config
 from services.metadata import (
     get_genius_client,
     search_genius_album,
@@ -43,7 +45,8 @@ from utils.helpers import extract_clean_artists, franco_to_arabic, get_clean_nam
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".opus", ".flac"}
+SUPPORTED_AUDIO_EXTENSIONS = set(config.AUDIO_EXTENSIONS)
+
 
 
 def find_best_track_match(
@@ -185,14 +188,30 @@ def tag_album_hybrid(
             except Exception as e:
                 logger.debug(f"Failed to fetch Genius cover art: {e}")
 
+    if not cover_bytes:
+        try:
+            from services.library_browser import extract_embedded_cover, find_cover_file
+
+            existing_img = find_cover_file(folder_path)
+            if existing_img and existing_img.is_file():
+                cover_bytes = existing_img.read_bytes()
+            else:
+                extracted = extract_embedded_cover(folder_path)
+                if extracted:
+                    cover_bytes = extracted[0]
+        except Exception as e:
+            logger.debug(f"Could not extract local album cover: {e}")
+
     # Write loose cover.jpg inside the folder for Navidrome directory indexing
     if cover_bytes:
         try:
             cover_file = folder_path / "cover.jpg"
-            cover_file.write_bytes(cover_bytes)
+            if not cover_file.exists() or cover_file.stat().st_size == 0:
+                cover_file.write_bytes(cover_bytes)
             logger.info(f"Saved loose cover.jpg for Navidrome in {folder_path.name}")
         except Exception as e:
             logger.warning(f"Failed to write loose cover.jpg: {e}")
+
 
     total_tracks = len(files)
     if mb_data and mb_data.get("tracks"):
@@ -365,8 +384,10 @@ def tag_album_hybrid(
                 audio["album"] = [resolved_album]
                 audio["tracknumber"] = [str(final_track_num)]
                 audio["tracktotal"] = [str(total_tracks)]
+                audio["totaltracks"] = [str(total_tracks)]
                 audio["discnumber"] = ["1"]
                 audio["disctotal"] = ["1"]
+                audio["totaldiscs"] = ["1"]
 
                 if mb_data and mb_data.get("date"):
                     audio["date"] = [str(mb_data["date"])]
@@ -395,6 +416,45 @@ def tag_album_hybrid(
                 audio.save()
             except Exception as flac_err:
                 logger.warning(f"Failed to tag FLAC track {file_path.name}: {flac_err}")
+
+        # Tag M4A files
+        elif f_ext == ".m4a":
+            try:
+                audio = MP4(str(file_path))
+                audio["\xa9nam"] = [matched_title]
+
+                if effective_artist and effective_artist.lower() not in ("unknown artist", "various"):
+                    audio["\xa9ART"] = [effective_artist]
+                    audio["aART"] = [effective_artist]
+
+                audio["\xa9alb"] = [resolved_album]
+                audio["trkn"] = [(final_track_num, total_tracks)]
+                audio["disk"] = [(1, 1)]
+
+                if mb_data and mb_data.get("date"):
+                    audio["\xa9day"] = [str(mb_data["date"])]
+
+                if mb_data and mb_data.get("genre"):
+                    audio["\xa9gen"] = [mb_data["genre"]]
+
+                if lyrics_text:
+                    audio["\xa9lyr"] = [lyrics_text]
+
+                if writers:
+                    audio["\xa9wrt"] = [", ".join(writers)]
+
+                if cover_bytes:
+                    cov_fmt = (
+                        MP4Cover.FORMAT_PNG
+                        if cover_bytes.startswith(b"\x89PNG")
+                        else MP4Cover.FORMAT_JPEG
+                    )
+                    audio["covr"] = [MP4Cover(cover_bytes, imageformat=cov_fmt)]
+
+                audio.save()
+            except Exception as m4a_err:
+                logger.warning(f"Failed to tag M4A track {file_path.name}: {m4a_err}")
+
 
     return {
         "album": resolved_album,
@@ -502,6 +562,22 @@ def tag_playlist_hybrid(
                 audio.save()
             except Exception as e:
                 logger.warning(f"Failed to tag playlist FLAC track {file_path.name}: {e}")
+
+        elif f_ext == ".m4a":
+            try:
+                audio = MP4(str(file_path))
+                audio["\xa9nam"] = [resolved_title]
+                if resolved_artist:
+                    audio["\xa9ART"] = [resolved_artist]
+                    audio["aART"] = [resolved_artist]
+                if resolved_genre:
+                    audio["\xa9gen"] = [resolved_genre]
+                if lyrics_text:
+                    audio["\xa9lyr"] = [lyrics_text]
+                audio.save()
+            except Exception as e:
+                logger.warning(f"Failed to tag playlist M4A track {file_path.name}: {e}")
+
 
     return {
         "album": "Custom Playlist",

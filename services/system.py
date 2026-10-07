@@ -27,7 +27,7 @@ def check_tool_availability() -> Dict[str, bool]:
 
 
 def get_disk_metrics(base_dir: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
-    """Calculates disk space usage and library statistics (MP3 and LRC count)."""
+    """Calculates disk space usage and library statistics across all supported audio formats and LRC files."""
     target_dir = Path(base_dir or config.BASE_DOWNLOAD_DIR).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -37,15 +37,17 @@ def get_disk_metrics(base_dir: Optional[Union[str, Path]] = None) -> Dict[str, A
     free_gb = free / (1024**3)
     pct = (used / total) * 100 if total > 0 else 0.0
 
-    mp3_count = 0
+    audio_count = 0
     lrc_count = 0
 
     if target_dir.exists():
         for root, _, files in os.walk(str(target_dir)):
+            if any(part.startswith(".") for part in root.split(os.sep)):
+                continue
             for f in files:
                 f_lower = f.lower()
-                if f_lower.endswith(".mp3"):
-                    mp3_count += 1
+                if f_lower.endswith(config.AUDIO_EXTENSIONS):
+                    audio_count += 1
                 elif f_lower.endswith(".lrc"):
                     lrc_count += 1
 
@@ -55,22 +57,25 @@ def get_disk_metrics(base_dir: Optional[Union[str, Path]] = None) -> Dict[str, A
         "used_gb": used_gb,
         "free_gb": free_gb,
         "pct_used": pct,
-        "mp3_count": mp3_count,
+        "audio_count": audio_count,
+        "mp3_count": audio_count,
         "lrc_count": lrc_count,
     }
 
 
 def get_album_folders(base_dir: Optional[Union[str, Path]] = None) -> List[str]:
-    """Returns sorted relative paths of all subdirectories containing MP3 or Opus audio files."""
+    """Returns sorted relative paths of all subdirectories containing supported audio files (.mp3, .flac, .opus, .m4a)."""
     root_path = Path(base_dir or config.BASE_DOWNLOAD_DIR).resolve()
     folders: List[str] = []
 
     if not root_path.exists():
         return folders
 
-    for current_dir, _, files in os.walk(str(root_path)):
-        if any(f.lower().endswith((".mp3", ".opus")) for f in files):
-            rel_path = os.path.relpath(current_dir, str(root_path))
+    for root, _, files in os.walk(str(root_path)):
+        if any(part.startswith(".") for part in root.split(os.sep)):
+            continue
+        if any(f.lower().endswith(config.AUDIO_EXTENSIONS) for f in files):
+            rel_path = os.path.relpath(root, str(root_path))
             if rel_path != ".":
                 # Normalize slashes to forward slashes for uniform cross-platform handling
                 folders.append(rel_path.replace("\\", "/"))

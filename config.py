@@ -74,3 +74,7 @@ WEBAPP_HOST = os.environ.get("WEBAPP_HOST", "127.0.0.1")
 WEBAPP_PORT = int(os.environ.get("WEBAPP_PORT", "8000"))
 WEBAPP_EXTERNAL_URL = os.environ.get("WEBAPP_EXTERNAL_URL", "").rstrip("/")
 
+# ================= AUDIO EXTENSIONS =================
+AUDIO_EXTENSIONS = ('.mp3', '.flac', '.opus', '.m4a')
+
+

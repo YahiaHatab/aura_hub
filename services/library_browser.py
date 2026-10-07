@@ -55,8 +55,9 @@ def find_cover_file(album_dir: Path) -> Optional[Path]:
 
 
 def extract_embedded_cover(album_dir: Path) -> Optional[Tuple[bytes, str]]:
-    """Extracts embedded front cover artwork from the first MP3 or FLAC file in album_dir.
+    """Extracts embedded front cover artwork from the first supported audio file in album_dir.
 
+    Supports MP3, FLAC, Opus, and M4A containers.
     If extracted, also saves cover.jpg / cover.png to album_dir for Navidrome and future serving.
     Returns:
         (image_bytes, mime_type) if found, else None.
@@ -67,7 +68,7 @@ def extract_embedded_cover(album_dir: Path) -> Optional[Tuple[bytes, str]]:
     try:
         audio_files = [
             f for f in album_dir.iterdir()
-            if f.is_file() and f.suffix.lower() in (".mp3", ".flac")
+            if f.is_file() and f.name.lower().endswith(config.AUDIO_EXTENSIONS)
         ]
     except Exception as e:
         logger.debug(f"Could not scan audio files in {album_dir}: {e}")
@@ -120,6 +121,54 @@ def extract_embedded_cover(album_dir: Path) -> Optional[Tuple[bytes, str]]:
         except Exception:
             pass
 
+    # Check Opus files
+    opus_files = [f for f in audio_files if f.suffix.lower() == ".opus"]
+    for opus_path in opus_files[:3]:
+        try:
+            import base64
+            from mutagen.flac import Picture
+            from mutagen.oggopus import OggOpus
+
+            audio = OggOpus(str(opus_path))
+            if "metadata_block_picture" in audio and audio["metadata_block_picture"]:
+                pic_b64 = audio["metadata_block_picture"][0]
+                pic = Picture(base64.b64decode(pic_b64))
+                data = getattr(pic, "data", None)
+                mime = getattr(pic, "mime", "image/jpeg") or "image/jpeg"
+                if data:
+                    target_ext = ".png" if "png" in mime.lower() else ".jpg"
+                    cache_file = album_dir / f"cover{target_ext}"
+                    try:
+                        if not cache_file.exists():
+                            cache_file.write_bytes(data)
+                    except Exception as cache_err:
+                        logger.debug(f"Failed to cache extracted cover: {cache_err}")
+                    return data, mime
+        except Exception:
+            pass
+
+    # Check M4A files
+    m4a_files = [f for f in audio_files if f.suffix.lower() == ".m4a"]
+    for m4a_path in m4a_files[:3]:
+        try:
+            from mutagen.mp4 import MP4, MP4Cover
+
+            audio = MP4(str(m4a_path))
+            covs = audio.get("covr")
+            if covs:
+                data = bytes(covs[0])
+                mime = "image/png" if covs[0].imageformat == MP4Cover.FORMAT_PNG else "image/jpeg"
+                target_ext = ".png" if "png" in mime.lower() else ".jpg"
+                cache_file = album_dir / f"cover{target_ext}"
+                try:
+                    if not cache_file.exists():
+                        cache_file.write_bytes(data)
+                except Exception as cache_err:
+                    logger.debug(f"Failed to cache extracted cover: {cache_err}")
+                return data, mime
+        except Exception:
+            pass
+
     return None
 
 
@@ -142,7 +191,10 @@ def get_library_albums() -> List[Dict[str, Any]]:
             artist = "Unknown Artist"
             album = parts[0] if parts else "Unknown Album"
 
-        audio_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in (".mp3", ".opus")]
+        audio_files = [
+            f for f in folder_path.iterdir()
+            if f.is_file() and f.name.lower().endswith(config.AUDIO_EXTENSIONS)
+        ]
         lrc_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".lrc"]
 
         track_count = len(audio_files)
@@ -171,18 +223,29 @@ def get_library_albums() -> List[Dict[str, Any]]:
                             break
                     except Exception:
                         pass
-                elif f_ext == ".opus":
+                elif f_ext in (".opus", ".flac"):
                     try:
-                        from mutagen.oggopus import OggOpus
+                        import mutagen
 
-                        tags = OggOpus(str(audio_path))
-                        if "lyrics" in tags and tags["lyrics"]:
+                        audio = mutagen.File(str(audio_path))
+                        if audio and getattr(audio, "tags", None) and audio.tags.get("lyrics"):
+                            has_lyrics = True
+                            break
+                    except Exception:
+                        pass
+                elif f_ext == ".m4a":
+                    try:
+                        from mutagen.mp4 import MP4
+
+                        audio = MP4(str(audio_path))
+                        if audio.get("\xa9lyr"):
                             has_lyrics = True
                             break
                     except Exception:
                         pass
             if has_lyrics:
                 lyrics_status = "unsynced_only"
+
 
         results.append(
             {

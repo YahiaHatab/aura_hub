@@ -345,6 +345,8 @@ class TestWebAppAndSecurity(unittest.TestCase):
         data = res.json()
         self.assertTrue(data["ok"])
         self.assertIn("disk", data)
+        self.assertIn("audio_count", data)
+        self.assertIn("mp3_count", data)
 
 
 if __name__ == "__main__":

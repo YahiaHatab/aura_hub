@@ -65,16 +65,19 @@ async def execute_task(
         )
 
         folder_path = Path(target_folder)
-        flac_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".flac"])
-        opus_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".opus"])
-        mp3_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
-        total_audio = flac_count + opus_count + mp3_count
-        lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
+        flac_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".flac"])
+        opus_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".opus"])
+        m4a_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".m4a"])
+        mp3_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".mp3"])
+        total_audio = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS])
+        lrc_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".lrc"])
 
         if flac_count > 0:
             format_tag = f"{flac_count} FLAC (Lossless)"
         elif opus_count > 0:
             format_tag = f"{opus_count} Opus (Native)"
+        elif m4a_count > 0:
+            format_tag = f"{m4a_count} M4A (AAC)"
         else:
             format_tag = f"{mp3_count} MP3"
 
@@ -286,16 +289,19 @@ async def search_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             executor, run_pipeline, chosen_url, "", sync_search_updater, chosen_qual
         )
         folder_path = Path(target_folder)
-        flac_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".flac"])
-        opus_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".opus"])
-        mp3_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".mp3"])
-        total_audio = flac_count + opus_count + mp3_count
-        lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
+        flac_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".flac"])
+        opus_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".opus"])
+        m4a_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".m4a"])
+        mp3_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".mp3"])
+        total_audio = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS])
+        lrc_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".lrc"])
 
         if flac_count > 0:
             fmt_label = f"{flac_count} FLAC (Lossless)"
         elif opus_count > 0:
             fmt_label = f"{opus_count} Opus (Native)"
+        elif m4a_count > 0:
+            fmt_label = f"{m4a_count} M4A (AAC)"
         else:
             fmt_label = f"{mp3_count} MP3"
 

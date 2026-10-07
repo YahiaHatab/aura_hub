@@ -111,8 +111,8 @@ async def library_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 executor, run_retag_folder, target_abs_path, "", sync_retag_updater
             )
             folder_path = Path(target_folder)
-            audio_count = len([f for f in folder_path.iterdir() if f.suffix.lower() in (".mp3", ".opus")])
-            lrc_count = len([f for f in folder_path.iterdir() if f.suffix.lower() == ".lrc"])
+            audio_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS])
+            lrc_count = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".lrc"])
 
             album_title = meta.get("album", "Album")
             artist = meta.get("artist", "Artist")

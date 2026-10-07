@@ -1297,7 +1297,7 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <div class="item-card" style="margin: 0; padding: 12px;">
-            <div style="font-size: 11px; color: var(--text-dim);">Indexed MP3s</div>
+            <div style="font-size: 11px; color: var(--text-dim);">Indexed Audio</div>
             <div style="font-size: 18px; font-weight: 700; color: #ffffff; margin-top: 2px;" id="statMp3">--</div>
           </div>
           <div class="item-card" style="margin: 0; padding: 12px;">
@@ -2057,7 +2057,7 @@
           document.getElementById('diskUsed').textContent = `Used: ${d.used_gb ? d.used_gb.toFixed(1) + ' GB' : '--'}`;
           document.getElementById('diskFree').textContent = `Free: ${d.free_gb ? d.free_gb.toFixed(1) + ' GB' : '--'}`;
 
-          document.getElementById('statMp3').textContent = data.mp3_count || 0;
+          document.getElementById('statMp3').textContent = (data.audio_count !== undefined ? data.audio_count : data.mp3_count) || 0;
           document.getElementById('statLrc').textContent = data.lrc_count || 0;
           document.getElementById('statAlbums').textContent = data.album_count || 0;
           document.getElementById('statNavi').textContent = data.navidrome_connected ? 'Connected' : 'Offline';
