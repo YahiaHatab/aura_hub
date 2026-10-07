@@ -49,12 +49,19 @@ else:
 # Ensure all admins are also included in the allowed users set
 ALLOWED_USER_IDS.update(ADMIN_USER_IDS)
 
-# ================= API KEYS & SECRETS =================
 GENIUS_ACCESS_TOKEN = os.environ.get(
     "GENIUS_ACCESS_TOKEN",
     "dNjPb3-f4YurUlKQ6kbIRHbm80uBxfBsRoKomEDgpnaLgScIavTO6e9_p19rUbFI",
 )
 ACOUSTID_API_KEY = os.environ.get("ACOUSTID_API_KEY", "cSpUJKpD")
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+DISCOGS_API_TOKEN = os.environ.get("DISCOGS_API_TOKEN", "")
+
+# ================= METADATA PROVIDERS CONFIGURATION =================
+MB_RATE_LIMIT_DELAY = float(os.environ.get("MB_RATE_LIMIT_DELAY", "1.0"))
+METADATA_HTTP_TIMEOUT = float(os.environ.get("METADATA_HTTP_TIMEOUT", "8.0"))
+
 
 # ================= STORAGE & PATHS =================
 _raw_music_dir = os.environ.get("BASE_DOWNLOAD_DIR", os.path.expanduser("~/Music"))

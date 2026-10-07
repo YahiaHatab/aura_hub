@@ -109,18 +109,20 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
 - **`franco_to_arabic(text)`:** Translates Franco-Arabic words (`fi` -> `في`, `el` -> `ال`, `banat` -> `بنات`, `aaks` -> `عكس`) and numeric digits (`3` -> `ع`, `7` -> `ح`, `2` -> `أ`, `5` -> `خ`, `6` -> `ط`, `8` -> `غ`).
 - **`sanitize_filename(name)`:** Strips forbidden filesystem characters (`\ / : * ? " < > |`) and collapses whitespace for safe folder creation across Linux and Windows.
 
-### 4.2 Multi-Stage Metadata & Fingerprinting (`services/metadata.py`)
-- **Stage 1 (Exact Match):** Combines bilingual artist candidates with Franco-Arabic album variations against MusicBrainz release queries (`release:"{alb}" AND artist:"{art}"`).
-- **Stage 2 (AcoustID):** If text queries return no hits and a sample audio file exists, executes Chromaprint (`fpcalc`) via AcoustID to identify the recording and release MBID.
-- **Stage 3 (Cover Art Archive):** Fetches high-resolution album jackets from `https://coverartarchive.org/release/{mbid}/front-500` (falling back to `/front`).
-- **Stage 4 (Genius Fallback):** Queries Genius for song lyrics (`USLT`), producers (`IPLS`, `TXXX:PRODUCER`), and composers/writers (`TCOM`).
+### 4.2 Multi-Provider Aggregator & Recommendation Engine (`services/metadata.py`)
+- **Multi-Backend Aggregation:** Concurrently queries MusicBrainz (with polite 1 req/s rate limiting), Deezer API (high-res `cover_xl`, tracklists, durations, contributors), iTunes Search API (1200x1200px artwork, worldwide index, durations), Spotify Web API (client credentials flow for album/track ISRCs and artwork), and Discogs API (rich producer, composer, and arranger credits).
+- **Candidate Recommendation Engine:**
+  - Evaluates candidate match confidence (0–100%) through fuzzy string similarity (`difflib` + token sets), Franco-Arabic transliterations, track count alignment, and duration proximity.
+  - Scores metadata completeness based on presence of high-res artwork (+20), full tracklist (+20), producers (+15), composers (+15), year (+10), genres (+10), and lyrics (+10).
+  - Designates `is_recommended = True` on the candidate offering the highest composite rank, generating a human-readable `preview` dictionary.
 - **Latin-Canonical Artist Resolution Strategy:** Resolves consistent artist naming across releases to prevent Navidrome discography fracturing:
   - *Tier 1 (Official Latin/English Alias):* Inspects MusicBrainz artist entity aliases (`aliases` list with `locale.startswith("en")` or `type == "Artist name"` where string `isascii()`, fetching `/ws/2/artist/{id}` if needed).
   - *Tier 2 (Source/Input Latin Candidate):* Inspects user/source input (`fallback_artist` or input query) using `extract_clean_artists()`. Uses ASCII credit name if available.
   - *Tier 3 (Native Script Fallback):* Falls back to native script (e.g. Arabic script) only if no Latin alias or input candidate exists.
 
 ### 4.3 Multi-Format Tagging & Duration-Tolerant Alignment (`services/tagger.py`)
-- **Multi-Format Engine:** Supports `.flac` (mutagen `FLAC` Vorbis comments + embedded `Picture`), `.opus` (Vorbis comments: `title`, `artist`, `albumartist`, `album`, `tracknumber`, `totaltracks`, `date`, `genre`, `lyrics`, `composer`, `producer`, `metadata_block_picture`), and `.mp3` (ID3v2.3: `TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`, `TPOS`, `TDRC`, `TCON`, `USLT`, `TCOM`, `IPLS`, `APIC`).
+- **Multi-Format Engine:** Supports `.flac` (mutagen `FLAC` Vorbis comments + embedded `Picture`), `.opus` (Vorbis comments: `title`, `artist`, `albumartist`, `album`, `tracknumber`, `totaltracks`, `date`, `genre`, `lyrics`, `composer`, `producer`, `metadata_block_picture`), `.mp3` (ID3v2.3: `TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`, `TPOS`, `TDRC`, `TCON`, `TCOM`, `TEXT`, `IPLS`, `TXXX:PRODUCER`, `TXXX:ARRANGER`, `USLT`, `APIC`), and `.m4a` (MP4 atoms: `\xa9nam`, `\xa9ART`, `aART`, `\xa9alb`, `trkn`, `disk`, `\xa9day`, `\xa9gen`, `\xa9wrt`, `\xa9lyr`, `----:com.apple.iTunes:PRODUCER`, `covr`).
+- **User-Chosen Metadata Ingestion:** Accepts normalized `UnifiedAlbumMetadata` or `UnifiedTrackMetadata` payloads to tag single files or whole albums with user-selected metadata choices.
 - When tagging multi-track albums, tracks are matched using `find_best_track_match()`:
   - Computes local audio length universally using mutagen: `mutagen.File(file_path).info.length`.
   - Compares duration against MusicBrainz track duration with tiered scoring:
@@ -131,6 +133,7 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
   - Token overlap score: $+40$ per matching word.
   - Candidate accepted if score $\ge 35$. Falls back to file sequence index if available, or first unassigned track.
 - **Navidrome Loose Cover:** Saves `cover.jpg` inside the folder alongside embedding the artwork frame into every audio track.
+
 
 ### 4.4 Synced Lyrics Engine (`services/lyrics.py`)
 - Queries `https://lrclib.net/api/get` (exact match) and `https://lrclib.net/api/search` (search fallback).
