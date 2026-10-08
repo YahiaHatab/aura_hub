@@ -456,7 +456,14 @@ async def serve_dashboard():
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dashboard frontend not found. Ensure static/index.html exists.",
         )
-    return FileResponse(index_file)
+    return FileResponse(
+        index_file,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 # Mount static directory for JS/CSS assets under both root and /hub prefixes
@@ -894,3 +901,4 @@ async def apply_metadata_api(
 # Mount API routes under both /api and /hub/api to support reverse proxy subpaths
 app.include_router(api_router, prefix="/api")
 app.include_router(api_router, prefix="/hub/api")
+
