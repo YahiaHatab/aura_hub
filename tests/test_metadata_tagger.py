@@ -152,18 +152,53 @@ class TestMetadataModelsAndScoring(unittest.TestCase):
         self.assertFalse(ranked[1].is_recommended)
 
     def test_arabic_genre_resolution(self):
-        from utils.helpers import is_arabic_music, resolve_fallback_genre
+        import re
+        from utils.helpers import is_arabic_music, normalize_genre, resolve_fallback_genre
         self.assertTrue(is_arabic_music("Elissa", "Saharna Ya Leil"))
         self.assertTrue(is_arabic_music("Amr Diab", "Kol Hayaty"))
         self.assertTrue(is_arabic_music("إليسا", "سهرنا يا ليل"))
         self.assertFalse(is_arabic_music("Coldplay", "Parachutes"))
+        self.assertFalse(is_arabic_music("PinkPantheress", "Fancy that"))
 
-        # Never return 'Music'
+        # Never return 'Music' or generic
         self.assertEqual(resolve_fallback_genre("Elissa", "Saharna Ya Leil", "Music"), "Arabic Pop")
         self.assertEqual(resolve_fallback_genre("Elissa", "Saharna Ya Leil", ""), "Arabic Pop")
         self.assertEqual(resolve_fallback_genre("Amr Diab", "Wayah", None), "Arabic Pop")
         self.assertEqual(resolve_fallback_genre("Coldplay", "Yellow", "Music"), "Pop")
         self.assertEqual(resolve_fallback_genre("Coldplay", "Yellow", "Alternative Rock"), "Alternative Rock")
+
+        # PinkPantheress "Fancy that" localized iTunes Arabic genre translated to English
+        self.assertEqual(normalize_genre("موسيقى البوب"), "Pop")
+        self.assertEqual(resolve_fallback_genre("PinkPantheress", "Fancy that", "موسيقى البوب"), "Pop")
+
+        # Arabic artists: tags must strictly remain in English
+        self.assertEqual(resolve_fallback_genre("Elissa", "Saharna Ya Leil", "موسيقى البوب"), "Pop")
+        self.assertEqual(resolve_fallback_genre("Elissa", "Saharna Ya Leil", "طرب"), "Tarab")
+        self.assertEqual(resolve_fallback_genre("Ahmed Saad", "Ekhtyaraty", "شعبي"), "Shaabi")
+        self.assertEqual(resolve_fallback_genre("Hassan Shakosh", "Bent El Giran", "مهرجانات"), "Mahraganat")
+        self.assertEqual(resolve_fallback_genre("Amr Diab", "Saharna Ya Lail", "البوب"), "Pop")
+        self.assertEqual(resolve_fallback_genre("Cairokee", "Roma", "موسيقى الروك"), "Rock")
+        self.assertEqual(resolve_fallback_genre("Wegz", "El Bakht", "موسيقى الراب"), "Hip-Hop/Rap")
+
+        # Deduplication and mixed strings
+        self.assertEqual(normalize_genre("Pop / موسيقى البوب"), "Pop")
+        self.assertEqual(normalize_genre("Pop (موسيقى البوب)"), "Pop")
+        self.assertEqual(normalize_genre("Rock / روك"), "Rock")
+        self.assertEqual(normalize_genre("Pop, Rock"), "Pop, Rock")
+
+        # Verify absolutely no Arabic characters exist in any resolved genre
+        for test_case in [
+            ("PinkPantheress", "Fancy that", "موسيقى البوب"),
+            ("Elissa", "Saharna Ya Leil", "طرب"),
+            ("Amr Diab", "Kol Hayaty", "بوب"),
+            ("Cairokee", "Abnaa El Batta El Soda", "موسيقى الروك"),
+            ("Fairuz", "Kifak Enta", "موسيقى عربية"),
+        ]:
+            res = resolve_fallback_genre(test_case[0], test_case[1], test_case[2])
+            self.assertIsNone(
+                re.search(r"[\u0600-\u06FF]", res),
+                f"Resolved genre '{res}' contains Arabic characters for {test_case}",
+            )
 
     def test_track_global_alignment_order_inversion(self):
         from services.tagger import align_album_tracks_globally
@@ -327,6 +362,28 @@ class TestUnifiedTaggerEngine(unittest.TestCase):
             self.assertIn("Producer Main", str(id3.get("TXXX:PRODUCER", "")))
             self.assertEqual(id3.getall("USLT")[0].text, "Test Lyrics Line 1\nLine 2")
             self.assertEqual(id3["APIC:Cover"].data, fake_cover)
+
+    def test_apply_unified_metadata_translates_arabic_genre_to_english(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            file_path = Path(tmp_dir) / "01 - Fancy That.mp3"
+            file_path.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\x00" * 100)
+
+            # Metadata with localized Arabic genre e.g. from iTunes
+            track_meta = UnifiedTrackMetadata(
+                title="Fancy that",
+                artist="PinkPantheress",
+                album="Fancy that",
+                genre="موسيقى البوب",
+                genres=["موسيقى البوب"],
+            )
+
+            success = apply_unified_metadata_to_file(file_path, track_meta)
+            self.assertTrue(success)
+
+            # Inspect written ID3 frames: TCON must be Pop in English!
+            id3 = ID3(str(file_path))
+            self.assertEqual(str(id3["TCON"].text[0]), "Pop")
+            self.assertEqual(track_meta.genre, "Pop")
 
     def test_apply_unified_metadata_to_flac(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

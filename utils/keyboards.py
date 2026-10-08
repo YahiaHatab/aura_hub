@@ -83,3 +83,112 @@ def build_search_results_keyboard(
         )
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data=cancel_callback)])
     return InlineKeyboardMarkup(keyboard)
+
+
+def build_metadata_review_keyboard(
+    candidates: List[Any],
+    session_id: str,
+) -> InlineKeyboardMarkup:
+    """Builds interactive inline keyboard for post-download metadata candidate review."""
+    keyboard: List[List[InlineKeyboardButton]] = []
+    source_icons = {
+        "iTunes": "🍎",
+        "MusicBrainz": "💿",
+        "Deezer": "🎧",
+        "Spotify": "🟢",
+        "Discogs": "📀",
+    }
+
+    # Find recommended candidate index
+    rec_idx = -1
+    for idx, cand in enumerate(candidates):
+        if getattr(cand, "is_recommended", False):
+            rec_idx = idx
+            break
+    if rec_idx == -1 and candidates:
+        rec_idx = 0
+
+    # Quick action row: [✅ Accept Recommendation]
+    if rec_idx >= 0 and rec_idx < len(candidates):
+        rec_cand = candidates[rec_idx]
+        rec_source = getattr(rec_cand, "source", "Best Match")
+        rec_conf = int(getattr(rec_cand, "confidence_score", 0))
+        keyboard.append([
+            InlineKeyboardButton(
+                f"✅ Accept Recommendation ({rec_source} {rec_conf}%)",
+                callback_data=f"dlmeta_rec:{session_id}",
+            )
+        ])
+
+    # Candidate source buttons: [Source Name (Confidence %)]
+    cand_buttons: List[InlineKeyboardButton] = []
+    for idx, cand in enumerate(candidates[:6]):
+        source = getattr(cand, "source", "Provider")
+        conf = int(getattr(cand, "confidence_score", 0))
+        icon = source_icons.get(source, "🌐")
+        star = "⭐ " if getattr(cand, "is_recommended", False) else ""
+        btn_text = f"{star}{icon} {source} ({conf}%)"
+        cand_buttons.append(
+            InlineKeyboardButton(btn_text, callback_data=f"dlmeta_sel:{session_id}:{idx}")
+        )
+
+    # Group candidate buttons in pairs
+    for i in range(0, len(cand_buttons), 2):
+        keyboard.append(cand_buttons[i : i + 2])
+
+    # Option to view tag diff / preview details before applying
+    keyboard.append([
+        InlineKeyboardButton("🔍 View Tag Diff / Preview", callback_data=f"dlmeta_diff:{session_id}:0")
+    ])
+
+    # Manual Override / Skip Tagging / Cancel
+    keyboard.append([
+        InlineKeyboardButton("⏩ Skip Tagging & Move", callback_data=f"dlmeta_skip:{session_id}"),
+        InlineKeyboardButton("❌ Discard", callback_data=f"dlmeta_cancel:{session_id}"),
+    ])
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_metadata_diff_keyboard(
+    session_id: str,
+    current_idx: int,
+    total_candidates: int,
+) -> InlineKeyboardMarkup:
+    """Builds navigation and action keyboard for tag diff preview dialog."""
+    keyboard: List[List[InlineKeyboardButton]] = []
+
+    # Direct apply button for current candidate
+    keyboard.append([
+        InlineKeyboardButton("✅ Apply This Source", callback_data=f"dlmeta_sel:{session_id}:{current_idx}")
+    ])
+
+    # Navigation between candidates
+    nav_row: List[InlineKeyboardButton] = []
+    if total_candidates > 1:
+        if current_idx > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"dlmeta_diff:{session_id}:{current_idx - 1}"))
+        nav_row.append(InlineKeyboardButton(f"{current_idx + 1}/{total_candidates}", callback_data="noop"))
+        if current_idx < total_candidates - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"dlmeta_diff:{session_id}:{current_idx + 1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+
+    # Back to selection / Skip
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Back to Review", callback_data=f"dlmeta_back:{session_id}"),
+        InlineKeyboardButton("⏩ Skip Tagging", callback_data=f"dlmeta_skip:{session_id}"),
+    ])
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_metadata_empty_keyboard(session_id: str) -> InlineKeyboardMarkup:
+    """Builds fallback keyboard when no online metadata candidates could be resolved."""
+    keyboard = [
+        [InlineKeyboardButton("✅ Use Probed Tags & Move", callback_data=f"dlmeta_default:{session_id}")],
+        [InlineKeyboardButton("⏩ Skip Tagging & Move", callback_data=f"dlmeta_skip:{session_id}")],
+        [InlineKeyboardButton("❌ Discard Download", callback_data=f"dlmeta_cancel:{session_id}")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+

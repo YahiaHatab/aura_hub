@@ -77,6 +77,91 @@ class TestHandlersAndApplication(unittest.TestCase):
         self.assertTrue(has_message_handler, "No MessageHandlers registered (auto link catcher missing)")
         self.assertTrue(has_conversation_handler, "No ConversationHandler registered (add user conversation missing)")
 
+    def test_post_download_metadata_review_keyboards(self):
+        from services.metadata import MetadataCandidate, UnifiedAlbumMetadata
+        from utils.keyboards import (
+            build_metadata_diff_keyboard,
+            build_metadata_empty_keyboard,
+            build_metadata_review_keyboard,
+        )
+
+        cand1 = MetadataCandidate(
+            source="iTunes",
+            confidence_score=98.0,
+            is_recommended=True,
+            album_data=UnifiedAlbumMetadata(album="Saharna Ya Leil", artist="Elissa"),
+            preview={"has_cover": True, "has_lyrics": True, "track_count": 16},
+        )
+        cand2 = MetadataCandidate(
+            source="MusicBrainz",
+            confidence_score=85.0,
+            is_recommended=False,
+            album_data=UnifiedAlbumMetadata(album="Saharna Ya Leil", artist="Elissa"),
+            preview={"has_cover": False, "has_lyrics": False, "track_count": 16},
+        )
+
+        # 1. Review keyboard with recommended option
+        markup = build_metadata_review_keyboard([cand1, cand2], session_id="test_sess_1")
+        callbacks = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertIn("dlmeta_rec:test_sess_1", callbacks)
+        self.assertIn("dlmeta_sel:test_sess_1:0", callbacks)
+        self.assertIn("dlmeta_sel:test_sess_1:1", callbacks)
+        self.assertIn("dlmeta_diff:test_sess_1:0", callbacks)
+        self.assertIn("dlmeta_skip:test_sess_1", callbacks)
+        self.assertIn("dlmeta_cancel:test_sess_1", callbacks)
+
+        # 2. Diff keyboard navigation
+        diff_markup = build_metadata_diff_keyboard(session_id="test_sess_1", current_idx=0, total_candidates=2)
+        diff_callbacks = [btn.callback_data for row in diff_markup.inline_keyboard for btn in row]
+        self.assertIn("dlmeta_sel:test_sess_1:0", diff_callbacks)
+        self.assertIn("dlmeta_diff:test_sess_1:1", diff_callbacks)
+        self.assertIn("dlmeta_back:test_sess_1", diff_callbacks)
+
+        # 3. Empty keyboard fallback
+        empty_markup = build_metadata_empty_keyboard(session_id="test_sess_1")
+        empty_callbacks = [btn.callback_data for row in empty_markup.inline_keyboard for btn in row]
+        self.assertIn("dlmeta_default:test_sess_1", empty_callbacks)
+        self.assertIn("dlmeta_skip:test_sess_1", empty_callbacks)
+        self.assertIn("dlmeta_cancel:test_sess_1", empty_callbacks)
+
+    def test_post_download_session_cancel_cleanup(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock
+        from handlers.download import _DOWNLOAD_SESSIONS, download_metadata_callback_handler
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            stg = Path(tmp_dir) / ".staging" / "dl_dummy"
+            stg.mkdir(parents=True)
+            dummy_file = stg / "test.mp3"
+            dummy_file.write_bytes(b"dummy")
+
+            sess_id = "test_cancel_sess"
+            _DOWNLOAD_SESSIONS[sess_id] = {
+                "session_id": sess_id,
+                "staging_dir": stg,
+                "detected_artist": "Artist",
+                "detected_album": "Album",
+                "candidates": [],
+            }
+
+            mock_query = MagicMock()
+            mock_query.data = f"dlmeta_cancel:{sess_id}"
+            mock_query.answer = AsyncMock()
+            mock_query.edit_message_text = AsyncMock()
+
+            mock_update = MagicMock()
+            mock_update.callback_query = mock_query
+
+            import asyncio
+            asyncio.run(download_metadata_callback_handler(mock_update, MagicMock()))
+
+            # Staging folder should be deleted and session removed
+            self.assertFalse(stg.exists())
+            self.assertNotIn(sess_id, _DOWNLOAD_SESSIONS)
+            mock_query.edit_message_text.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
+

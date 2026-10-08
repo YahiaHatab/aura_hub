@@ -13,6 +13,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import config
+from services.metadata import MetadataCandidate, UnifiedAlbumMetadata, UnifiedTrackMetadata
 from services.web import app, verify_telegram_init_data
 
 
@@ -348,6 +349,155 @@ class TestWebAppAndSecurity(unittest.TestCase):
         self.assertIn("audio_count", data)
         self.assertIn("mp3_count", data)
 
+    def test_metadata_search_endpoint(self):
+        """Tests GET /api/metadata/search for albums and tracks."""
+        # 1. Missing query -> 400
+        res = self.client.get("/api/metadata/search?query=", headers=self.regular_headers)
+        self.assertEqual(res.status_code, 400)
+
+        # 2. Album search candidate list
+        mock_cand = MetadataCandidate(
+            source="MusicBrainz",
+            confidence_score=95.0,
+            is_recommended=True,
+            album_data=UnifiedAlbumMetadata(
+                album="Fancy that",
+                artist="PinkPantheress",
+                year="2025",
+                genre="Pop",
+                genres=["Pop", "Drum and Bass"],
+                tracks=[UnifiedTrackMetadata(title="Tonight", track_number=1, duration_seconds=180.0)],
+            ),
+            preview={
+                "title": "Fancy that",
+                "artist": "PinkPantheress",
+                "year": "2025",
+                "genres": "Pop",
+                "track_count": 1,
+                "has_cover": True,
+                "has_lyrics": True,
+            },
+        )
+        with patch("services.web.search_album_metadata_candidates_async", return_value=[mock_cand]):
+            res = self.client.get(
+                "/api/metadata/search?query=Fancy+that&artist=PinkPantheress&type=album",
+                headers=self.regular_headers,
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["count"], 1)
+            self.assertEqual(data["candidates"][0]["source"], "MusicBrainz")
+            self.assertTrue(data["candidates"][0]["is_recommended"])
+
+        # 3. Track search candidate list
+        mock_trk_cand = MetadataCandidate(
+            source="Deezer",
+            confidence_score=88.0,
+            is_recommended=True,
+            track_data=UnifiedTrackMetadata(
+                title="Boy's a liar",
+                artist="PinkPantheress",
+                album="Boy's a liar",
+                year="2022",
+                genre="Pop",
+            ),
+            preview={"title": "Boy's a liar", "artist": "PinkPantheress", "has_cover": True},
+        )
+        with patch("services.web.search_track_metadata_candidates_async", return_value=[mock_trk_cand]):
+            res = self.client.get(
+                "/api/metadata/search?query=Boy's+a+liar&artist=PinkPantheress&type=track",
+                headers=self.regular_headers,
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["candidates"][0]["source"], "Deezer")
+
+    def test_metadata_inspect_endpoint(self):
+        """Tests GET /api/metadata/inspect for both albums and individual tracks."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            album_dir = tmp_path / "Elissa" / "Saharna Ya Leil"
+            album_dir.mkdir(parents=True)
+            track_file = album_dir / "01 - Saharna Ya Leil.mp3"
+            track_file.write_bytes(b"ID3 dummy content for test")
+
+            with patch("config.BASE_DOWNLOAD_DIR", tmp_path):
+                # Inspect album directory
+                res_album = self.client.get(
+                    "/api/metadata/inspect?path=Elissa/Saharna Ya Leil",
+                    headers=self.regular_headers,
+                )
+                self.assertEqual(res_album.status_code, 200)
+                data_alb = res_album.json()
+                self.assertTrue(data_alb["ok"])
+                self.assertEqual(data_alb["type"], "album")
+
+                # Inspect track file
+                res_track = self.client.get(
+                    "/api/metadata/inspect?path=Elissa/Saharna Ya Leil/01 - Saharna Ya Leil.mp3",
+                    headers=self.regular_headers,
+                )
+                self.assertEqual(res_track.status_code, 200)
+                data_trk = res_track.json()
+                self.assertTrue(data_trk["ok"])
+                self.assertEqual(data_trk["type"], "track")
+
+                # Path traversal attack -> 400
+                res_bad = self.client.get(
+                    "/api/metadata/inspect?path=../../etc/passwd",
+                    headers=self.regular_headers,
+                )
+                self.assertEqual(res_bad.status_code, 400)
+
+    def test_metadata_apply_endpoint(self):
+        """Tests POST /api/metadata/apply with authorization checks and tagging execution."""
+        payload = {
+            "path": "Elissa/Saharna Ya Leil",
+            "type": "album",
+            "candidate": {
+                "source": "MusicBrainz",
+                "album_data": {
+                    "album": "Saharna Ya Leil",
+                    "artist": "Elissa",
+                    "year": "2016",
+                    "genre": "Arabic Pop",
+                    "tracks": [{"title": "Saharna Ya Leil", "track_number": 1}],
+                },
+            },
+            "rescan": False,
+        }
+
+        # Non-admin user -> 403 Forbidden
+        res_non_admin = self.client.post(
+            "/api/metadata/apply",
+            json=payload,
+            headers=self.regular_headers,
+        )
+        self.assertEqual(res_non_admin.status_code, 403)
+
+        # Admin user applying to album
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            album_dir = tmp_path / "Elissa" / "Saharna Ya Leil"
+            album_dir.mkdir(parents=True)
+            with patch("config.BASE_DOWNLOAD_DIR", tmp_path):
+                with patch(
+                    "services.web.apply_unified_metadata_to_album",
+                    return_value={"album": "Saharna Ya Leil", "artist": "Elissa"},
+                ):
+                    res = self.client.post(
+                        "/api/metadata/apply",
+                        json=payload,
+                        headers=self.admin_headers,
+                    )
+                    self.assertEqual(res.status_code, 200)
+                    data = res.json()
+                    self.assertTrue(data["ok"])
+                    self.assertIn("Successfully applied", data["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

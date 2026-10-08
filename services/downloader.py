@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import urllib.parse
@@ -15,11 +16,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import mutagen
+
 import config
 from services.lyrics import sync_all_lrc_in_folder
 from services.system import rehome_album_folder
 from services.tagger import tag_album_hybrid, tag_playlist_hybrid
-from utils.helpers import parse_genius_input, sanitize_filename
+from utils.helpers import parse_genius_input, resolve_fallback_genre, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -74,19 +77,15 @@ def run_youtube_search(query: str, limit: int = 5) -> List[Dict[str, str]]:
     return results
 
 
-def run_pipeline(
+def download_media_staging(
     media_url: str,
     genius_raw: str = "",
     status_updater: Optional[Callable[[str], None]] = None,
     quality: str = "auto",
-) -> Tuple[Path, Dict[str, Any]]:
-    """Primary download and tagging orchestration pipeline.
+) -> Dict[str, Any]:
+    """Downloads audio files into an isolated staging directory prior to metadata review.
 
-    Dispatches audio extraction based on media source and quality preference:
-    - YouTube / YouTube Music: directly invokes yt-dlp (MP3 for 'mp3'; native Opus for 'auto'/'opus'/'flac').
-    - Lossless streaming (Spotify, Deezer, Tidal, Qobuz):
-      * 'auto' or 'flac': attempts SpotiFLAC first, falling back to yt-dlp/spotdl native Opus on failure/absence.
-      * 'opus' or 'mp3': skips SpotiFLAC and extracts directly via yt-dlp/spotdl.
+    Probes media titles and audio durations without applying tags or moving to active library.
     """
     quality = (quality or "auto").lower().strip()
     if quality not in ("auto", "flac", "opus", "mp3"):
@@ -95,8 +94,15 @@ def run_pipeline(
     is_lossless_source = any(d in media_url.lower() for d in LOSSLESS_DOMAINS)
     parsed_genius = parse_genius_input(genius_raw)
 
+    staging_id = secrets.token_hex(6)
+    staging_dir = config.BASE_DOWNLOAD_DIR / ".staging" / f"dl_{staging_id}"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
     if status_updater:
         status_updater("📥 `[1/4]` *Streaming & Extracting Audio Files...*")
+
+    detected_artist = "Unknown Artist"
+    detected_album = "Unknown Album"
 
     # ================= CASE 2: LOSSLESS STREAMING SERVICES =================
     if is_lossless_source:
@@ -116,12 +122,8 @@ def run_pipeline(
             domain_name = "Qobuz"
 
         folder_label = f"{domain_name}_{category.title()}_{slug[:8]}"
-        target_folder = config.BASE_DOWNLOAD_DIR / f"{domain_name} Downloads" / folder_label
-        target_folder.mkdir(parents=True, exist_ok=True)
 
         flac_resolved = False
-
-        # Attempt SpotiFLAC when quality is 'auto' or 'flac'
         if quality in ("auto", "flac"):
             if status_updater:
                 status_updater("💎 `[1/4]` *Attempting Lossless FLAC Download via SpotiFLAC...*")
@@ -130,7 +132,7 @@ def run_pipeline(
 
                 SpotiFLAC(
                     url=clean_url,
-                    output_dir=target_folder,
+                    output_dir=staging_dir,
                     services=["tidal", "qobuz", "deezer", "amazon"],
                     filename_format="{track}. {title}",
                     use_track_numbers=True,
@@ -139,7 +141,7 @@ def run_pipeline(
                 logger.warning(f"SpotiFLAC invocation failed: {e}")
 
             flac_files = [
-                f for f in target_folder.iterdir()
+                f for f in staging_dir.iterdir()
                 if f.is_file() and f.suffix.lower() == ".flac"
             ]
             if flac_files:
@@ -147,6 +149,7 @@ def run_pipeline(
                 logger.info(f"SpotiFLAC successfully resolved {len(flac_files)} FLAC file(s).")
             else:
                 if quality == "flac":
+                    shutil.rmtree(staging_dir, ignore_errors=True)
                     raise RuntimeError(
                         f"Lossless FLAC could not be resolved via SpotiFLAC for {clean_url}."
                     )
@@ -154,7 +157,6 @@ def run_pipeline(
                 if status_updater:
                     status_updater("🎧 `[1/4]` *FLAC unavailable. Falling back to native Opus...*")
 
-        # Fallback / explicit compressed extraction
         if not flac_resolved:
             fallback_format = "mp3" if quality == "mp3" else "opus"
 
@@ -166,15 +168,17 @@ def run_pipeline(
                         "download",
                         clean_url,
                         "--output",
-                        f"{target_folder}/{{artist}} - {{title}}.{{output-ext}}",
+                        f"{staging_dir}/{{artist}} - {{title}}.{{output-ext}}",
                         "--format",
                         fallback_format,
                     ]
                     res = subprocess.run(cmd, capture_output=True, text=True)
                     if res.returncode != 0:
+                        shutil.rmtree(staging_dir, ignore_errors=True)
                         raise RuntimeError(f"spotdl failed:\n{res.stderr or res.stdout}")
                 else:
                     if not shutil.which("yt-dlp"):
+                        shutil.rmtree(staging_dir, ignore_errors=True)
                         raise RuntimeError(
                             "spotdl binary was not found and yt-dlp is unavailable. "
                             "Please install spotdl (`pip install spotdl`) or yt-dlp."
@@ -189,14 +193,16 @@ def run_pipeline(
                         "--embed-thumbnail",
                         "--embed-metadata",
                         "-o",
-                        str(target_folder / "%(title)s.%(ext)s"),
+                        str(staging_dir / "%(title)s.%(ext)s"),
                         clean_url,
                     ]
                     res = subprocess.run(cmd, capture_output=True, text=True)
                     if res.returncode != 0:
+                        shutil.rmtree(staging_dir, ignore_errors=True)
                         raise RuntimeError(f"yt-dlp fallback failed:\n{res.stderr or res.stdout}")
             else:
                 if not shutil.which("yt-dlp"):
+                    shutil.rmtree(staging_dir, ignore_errors=True)
                     raise RuntimeError("yt-dlp binary is not installed or not in PATH.")
                 cmd = [
                     "yt-dlp",
@@ -208,49 +214,50 @@ def run_pipeline(
                     "--embed-thumbnail",
                     "--embed-metadata",
                     "-o",
-                    str(target_folder / "%(title)s.%(ext)s"),
+                    str(staging_dir / "%(title)s.%(ext)s"),
                     clean_url,
                 ]
                 res = subprocess.run(cmd, capture_output=True, text=True)
                 if res.returncode != 0:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
                     raise RuntimeError(f"yt-dlp extraction failed:\n{res.stderr or res.stdout}")
 
-        # Validate that audio files were generated
-        audio_files = [
-            f for f in target_folder.iterdir()
-            if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS
-        ]
-        if not audio_files:
-            raise RuntimeError(f"No audio files found in destination folder: {target_folder}")
-
+        # Probed metadata for lossless streaming
         if parsed_genius:
-            meta = tag_album_hybrid(
-                target_folder,
-                folder_label,
-                "Various",
-                genius_raw,
-                parsed_genius,
-                status_updater,
-            )
+            detected_album = parsed_genius.get("album") or folder_label
+            detected_artist = parsed_genius.get("artist") or domain_name
         else:
-            meta = tag_playlist_hybrid(target_folder, status_updater)
-
-        effective_artist = meta.get("artist") or ""
-        if effective_artist and effective_artist.lower() not in (
-            "various",
-            "unknown artist",
-            "various artists",
-        ):
-            target_folder = rehome_album_folder(target_folder, effective_artist)
-
-        if status_updater:
-            status_updater("🎤 `[4/4]` *Fetching Synced .lrc Lyrics...*")
-        sync_all_lrc_in_folder(target_folder)
-        return target_folder, meta
+            audio_files_tmp = [
+                f for f in staging_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS
+            ]
+            if audio_files_tmp:
+                try:
+                    mut = mutagen.File(str(audio_files_tmp[0]))
+                    if mut:
+                        cand_art = getattr(mut, "tags", None)
+                        if cand_art:
+                            detected_artist = (
+                                str(cand_art.get("artist", [""])[0])
+                                or str(cand_art.get("TPE1", [""])[0])
+                                or domain_name
+                            )
+                            detected_album = (
+                                str(cand_art.get("album", [""])[0])
+                                or str(cand_art.get("TALB", [""])[0])
+                                or folder_label
+                            )
+                except Exception:
+                    pass
+            if not detected_artist or detected_artist == "Unknown Artist":
+                detected_artist = domain_name
+            if not detected_album or detected_album == "Unknown Album":
+                detected_album = folder_label
 
     # ================= CASE 1: YOUTUBE & YOUTUBE MUSIC =================
     else:
         if not shutil.which("yt-dlp"):
+            shutil.rmtree(staging_dir, ignore_errors=True)
             raise RuntimeError("yt-dlp binary is not installed or not in PATH.")
 
         audio_format = "mp3" if quality == "mp3" else "opus"
@@ -290,11 +297,11 @@ def run_pipeline(
         ):
             clean_artist = sanitize_filename(parsed_genius["artist"])
 
-        target_folder = config.BASE_DOWNLOAD_DIR / clean_artist / clean_album
-        target_folder.mkdir(parents=True, exist_ok=True)
+        detected_artist = clean_artist
+        detected_album = clean_album
 
         output_tmpl = str(
-            target_folder / "%(track_number,playlist_index)02d - %(title)s.%(ext)s"
+            staging_dir / "%(track_number,playlist_index)02d - %(title)s.%(ext)s"
         )
         cmd = [
             "yt-dlp",
@@ -311,25 +318,133 @@ def run_pipeline(
         ]
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
+            shutil.rmtree(staging_dir, ignore_errors=True)
             raise RuntimeError(f"yt-dlp failed:\n{res.stderr or res.stdout}")
 
+    # Inspect downloaded audio files
+    audio_files = sorted([
+        f for f in staging_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS
+    ])
+
+    durations: List[float] = []
+    for af in audio_files:
+        try:
+            mut = mutagen.File(str(af))
+            if mut and getattr(mut, "info", None) and hasattr(mut.info, "length"):
+                durations.append(float(mut.info.length))
+        except Exception:
+            pass
+
+    return {
+        "session_id": staging_id,
+        "staging_dir": staging_dir,
+        "detected_artist": detected_artist,
+        "detected_album": detected_album,
+        "audio_files": audio_files,
+        "durations": durations,
+        "genius_raw": genius_raw,
+        "parsed_genius": parsed_genius,
+        "quality": quality,
+        "is_single": len(audio_files) == 1,
+    }
+
+
+def finalize_staged_media(
+    staging_dir: Union[str, Path],
+    detected_artist: str = "",
+    detected_album: str = "",
+    chosen_metadata: Optional[Any] = None,
+    skip_tagging: bool = False,
+    genius_raw: str = "",
+    parsed_genius: Optional[Dict[str, str]] = None,
+    status_updater: Optional[Callable[[str], None]] = None,
+) -> Tuple[Path, Dict[str, Any]]:
+    """Applies metadata & lyrics to staged audio files, then moves them to active library."""
+    staging_path = Path(staging_dir).resolve()
+    if not staging_path.exists():
+        raise FileNotFoundError(f"Staging directory `{staging_path}` does not exist.")
+
+    if skip_tagging:
+        meta = {
+            "album": detected_album or "Album",
+            "artist": detected_artist or "Artist",
+            "genre": resolve_fallback_genre(detected_artist, detected_album),
+        }
+    else:
+        if status_updater:
+            status_updater("⚡ `[3/4]` *Applying metadata & tags...*")
         meta = tag_album_hybrid(
-            target_folder,
-            clean_album,
-            clean_artist,
+            staging_path,
+            detected_album,
+            detected_artist,
             genius_raw,
             parsed_genius,
             status_updater,
+            chosen_metadata=chosen_metadata,
         )
-
-        effective_artist = meta.get("artist") or ""
-        if effective_artist:
-            target_folder = rehome_album_folder(target_folder, effective_artist)
-
         if status_updater:
             status_updater("🎤 `[4/4]` *Fetching Synced .lrc Lyrics...*")
-        sync_all_lrc_in_folder(target_folder)
-        return target_folder, meta
+        sync_all_lrc_in_folder(staging_path)
+
+    effective_artist = meta.get("artist") or detected_artist or "Unknown Artist"
+    effective_album = meta.get("album") or detected_album or "Unknown Album"
+    clean_artist = sanitize_filename(effective_artist)
+    clean_album = sanitize_filename(effective_album)
+
+    final_dir = config.BASE_DOWNLOAD_DIR / clean_artist / clean_album
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    # Move files into final Navidrome library directory
+    for f in list(staging_path.iterdir()):
+        if f.is_file():
+            dest_f = final_dir / f.name
+            if dest_f.exists():
+                try:
+                    dest_f.unlink()
+                except Exception:
+                    pass
+            shutil.move(str(f), str(dest_f))
+
+    # Clean empty staging directory and .staging parent if empty
+    try:
+        shutil.rmtree(str(staging_path), ignore_errors=True)
+        staging_parent = config.BASE_DOWNLOAD_DIR / ".staging"
+        if staging_parent.exists() and not any(staging_parent.iterdir()):
+            staging_parent.rmdir()
+    except Exception:
+        pass
+
+    if effective_artist and effective_artist.lower() not in (
+        "various",
+        "unknown artist",
+        "various artists",
+    ):
+        final_dir = rehome_album_folder(final_dir, effective_artist)
+
+    return final_dir, meta
+
+
+def run_pipeline(
+    media_url: str,
+    genius_raw: str = "",
+    status_updater: Optional[Callable[[str], None]] = None,
+    quality: str = "auto",
+) -> Tuple[Path, Dict[str, Any]]:
+    """Primary download and tagging orchestration pipeline.
+
+    Chains download_media_staging and finalize_staged_media with default hybrid tagging.
+    """
+    stage = download_media_staging(media_url, genius_raw, status_updater, quality)
+    return finalize_staged_media(
+        staging_dir=stage["staging_dir"],
+        detected_artist=stage["detected_artist"],
+        detected_album=stage["detected_album"],
+        chosen_metadata=None,
+        genius_raw=genius_raw,
+        parsed_genius=stage.get("parsed_genius"),
+        status_updater=status_updater,
+    )
 
 
 def run_retag_folder(
@@ -407,6 +522,5 @@ def run_retag_folder(
     if status_updater:
         status_updater("🎤 `[4/4]` *Generating Synced .lrc Lyrics...*")
     sync_all_lrc_in_folder(folder_path)
-
     return folder_path, meta
 

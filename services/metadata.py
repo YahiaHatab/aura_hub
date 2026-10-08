@@ -763,22 +763,23 @@ class DeezerProvider:
         url = f"https://api.deezer.com/search/album?q={urllib.parse.quote(query)}&limit=3"
 
         try:
+            headers = {"Accept-Language": "en-US,en;q=0.9", "User-Agent": "AuraHub/1.0"}
             async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url)
+                resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
                     return []
                 data = resp.json().get("data", [])
                 if not data and artist:
                     # Fallback to simple query
                     fallback_url = f"https://api.deezer.com/search/album?q={urllib.parse.quote(f'{artist} {album}')}&limit=3"
-                    resp = await client.get(fallback_url)
+                    resp = await client.get(fallback_url, headers=headers)
                     data = resp.json().get("data", []) if resp.status_code == 200 else []
 
                 for item in data[:2]:
                     album_id = item.get("id")
                     if not album_id:
                         continue
-                    detail_resp = await client.get(f"https://api.deezer.com/album/{album_id}")
+                    detail_resp = await client.get(f"https://api.deezer.com/album/{album_id}", headers=headers)
                     if detail_resp.status_code != 200:
                         continue
                     detail = detail_resp.json()
@@ -796,9 +797,20 @@ class DeezerProvider:
                         elif "composer" in role and name not in composers:
                             composers.append(name)
 
+                    dz_genre = resolve_fallback_genre(
+                        detail.get("artist", {}).get("name", artist),
+                        detail.get("title", album),
+                        ", ".join(genre_list[:2]),
+                    )
+
                     track_items = detail.get("tracks", {}).get("data", [])
                     tracks: List[UnifiedTrackMetadata] = []
                     for trk in track_items:
+                        t_genre = resolve_fallback_genre(
+                            trk.get("artist", {}).get("name") or detail.get("artist", {}).get("name", artist),
+                            detail.get("title", album),
+                            dz_genre,
+                        )
                         tracks.append(
                             UnifiedTrackMetadata(
                                 title=trk.get("title", ""),
@@ -808,8 +820,8 @@ class DeezerProvider:
                                 total_tracks=len(track_items),
                                 disc_number=int(trk.get("disk_number", 1)),
                                 year=str(detail.get("release_date", ""))[:4],
-                                genre=", ".join(genre_list[:2]),
-                                genres=genre_list,
+                                genre=t_genre,
+                                genres=[t_genre] if t_genre else [],
                                 duration_seconds=float(trk.get("duration", 0)),
                                 isrc=trk.get("isrc", ""),
                                 cover_url=detail.get("cover_xl") or detail.get("cover_big") or "",
@@ -819,11 +831,6 @@ class DeezerProvider:
                         )
 
                     cover_url = detail.get("cover_xl") or detail.get("cover_big") or ""
-                    dz_genre = resolve_fallback_genre(
-                        detail.get("artist", {}).get("name", artist),
-                        detail.get("title", album),
-                        ", ".join(genre_list[:2]),
-                    )
                     results.append(
                         UnifiedAlbumMetadata(
                             album=detail.get("title", album),
@@ -831,7 +838,7 @@ class DeezerProvider:
                             album_artist=detail.get("artist", {}).get("name", artist),
                             year=str(detail.get("release_date", "")),
                             genre=dz_genre,
-                            genres=genre_list or [dz_genre],
+                            genres=[dz_genre] if dz_genre else genre_list,
                             total_tracks=int(detail.get("nb_tracks", len(tracks))),
                             cover_url=cover_url,
                             tracks=tracks,
@@ -852,17 +859,25 @@ class DeezerProvider:
         url = f"https://api.deezer.com/search/track?q={urllib.parse.quote(query)}&limit=3"
 
         try:
+            headers = {"Accept-Language": "en-US,en;q=0.9", "User-Agent": "AuraHub/1.0"}
             async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url)
+                resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
                     return []
                 data = resp.json().get("data", [])
                 for trk in data[:3]:
+                    trk_genre = resolve_fallback_genre(
+                        trk.get("artist", {}).get("name", artist),
+                        trk.get("album", {}).get("title", ""),
+                        "",
+                    )
                     results.append(
                         UnifiedTrackMetadata(
                             title=trk.get("title", title),
                             artist=trk.get("artist", {}).get("name", artist),
                             album=trk.get("album", {}).get("title", ""),
+                            genre=trk_genre,
+                            genres=[trk_genre] if trk_genre else [],
                             duration_seconds=float(trk.get("duration", 0)),
                             cover_url=trk.get("album", {}).get("cover_xl") or trk.get("album", {}).get("cover_big", ""),
                             source="Deezer",
@@ -881,11 +896,12 @@ class ITunesProvider:
     async def search_album(album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
         results: List[UnifiedAlbumMetadata] = []
         term = f"{artist} {album}".strip()
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(term)}&entity=album&limit=3"
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(term)}&entity=album&limit=3&lang=en_us"
 
         try:
+            headers = {"Accept-Language": "en-US,en;q=0.9", "User-Agent": "AuraHub/1.0"}
             async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url)
+                resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
                     return []
                 candidates = resp.json().get("results", [])
@@ -895,9 +911,9 @@ class ITunesProvider:
                     if not coll_id:
                         continue
 
-                    # Lookup full tracklist for album
-                    lookup_url = f"https://itunes.apple.com/lookup?id={coll_id}&entity=song"
-                    l_resp = await client.get(lookup_url)
+                    # Lookup full tracklist for album in English
+                    lookup_url = f"https://itunes.apple.com/lookup?id={coll_id}&entity=song&lang=en_us"
+                    l_resp = await client.get(lookup_url, headers=headers)
                     if l_resp.status_code != 200:
                         continue
                     l_data = l_resp.json().get("results", [])
@@ -906,8 +922,19 @@ class ITunesProvider:
                     raw_cover = item.get("artworkUrl100", "")
                     highres_cover = raw_cover.replace("100x100bb.jpg", "1200x1200bb.jpg") if raw_cover else ""
 
+                    itunes_genre = resolve_fallback_genre(
+                        item.get("artistName", artist),
+                        item.get("collectionName", album),
+                        item.get("primaryGenreName", ""),
+                    )
+
                     tracks: List[UnifiedTrackMetadata] = []
                     for t in track_items:
+                        t_genre = resolve_fallback_genre(
+                            t.get("artistName", artist),
+                            t.get("collectionName", album),
+                            t.get("primaryGenreName", itunes_genre),
+                        )
                         tracks.append(
                             UnifiedTrackMetadata(
                                 title=t.get("trackName", ""),
@@ -918,8 +945,8 @@ class ITunesProvider:
                                 disc_number=int(t.get("discNumber", 1)),
                                 total_discs=int(t.get("discCount", 1)),
                                 year=str(t.get("releaseDate", ""))[:4],
-                                genre=t.get("primaryGenreName", ""),
-                                genres=[t.get("primaryGenreName")] if t.get("primaryGenreName") else [],
+                                genre=t_genre,
+                                genres=[t_genre] if t_genre else [],
                                 duration_seconds=float(t.get("trackTimeMillis", 0)) / 1000.0,
                                 cover_url=highres_cover,
                                 source="iTunes",
@@ -927,11 +954,6 @@ class ITunesProvider:
                             )
                         )
 
-                    itunes_genre = resolve_fallback_genre(
-                        item.get("artistName", artist),
-                        item.get("collectionName", album),
-                        item.get("primaryGenreName", ""),
-                    )
                     results.append(
                         UnifiedAlbumMetadata(
                             album=item.get("collectionName", album),
@@ -955,11 +977,12 @@ class ITunesProvider:
     async def search_track(title: str, artist: str = "") -> List[UnifiedTrackMetadata]:
         results: List[UnifiedTrackMetadata] = []
         term = f"{artist} {title}".strip()
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(term)}&entity=song&limit=3"
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(term)}&entity=song&limit=3&lang=en_us"
 
         try:
+            headers = {"Accept-Language": "en-US,en;q=0.9", "User-Agent": "AuraHub/1.0"}
             async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url)
+                resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
                     return []
                 candidates = resp.json().get("results", [])
@@ -967,6 +990,11 @@ class ITunesProvider:
                 for t in candidates[:3]:
                     raw_cover = t.get("artworkUrl100", "")
                     highres_cover = raw_cover.replace("100x100bb.jpg", "1200x1200bb.jpg") if raw_cover else ""
+                    trk_genre = resolve_fallback_genre(
+                        t.get("artistName", artist),
+                        t.get("collectionName", ""),
+                        t.get("primaryGenreName", ""),
+                    )
                     results.append(
                         UnifiedTrackMetadata(
                             title=t.get("trackName", title),
@@ -975,7 +1003,8 @@ class ITunesProvider:
                             track_number=int(t.get("trackNumber", 1)),
                             total_tracks=int(t.get("trackCount", 1)),
                             disc_number=int(t.get("discNumber", 1)),
-                            genre=t.get("primaryGenreName", ""),
+                            genre=trk_genre,
+                            genres=[trk_genre] if trk_genre else [],
                             duration_seconds=float(t.get("trackTimeMillis", 0)) / 1000.0,
                             cover_url=highres_cover,
                             source="iTunes",
@@ -1033,7 +1062,7 @@ class SpotifyProvider:
         url = f"https://api.spotify.com/v1/search?q={urllib.parse.quote(query)}&type=album&limit=2"
 
         try:
-            headers = {"Authorization": f"Bearer {token}"}
+            headers = {"Authorization": f"Bearer {token}", "Accept-Language": "en-US,en;q=0.9"}
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
@@ -1052,6 +1081,13 @@ class SpotifyProvider:
                     images = detail.get("images", [])
                     cover_url = images[0].get("url") if images else ""
 
+                    sp_artist = ", ".join(a.get("name") for a in detail.get("artists", [])) or artist
+                    sp_genre = resolve_fallback_genre(
+                        sp_artist,
+                        detail.get("name", album),
+                        ", ".join(detail.get("genres", [])[:2]),
+                    )
+
                     tracks: List[UnifiedTrackMetadata] = []
                     for t in detail.get("tracks", {}).get("items", []):
                         t_artists = [a.get("name") for a in t.get("artists", []) if a.get("name")]
@@ -1064,6 +1100,8 @@ class SpotifyProvider:
                                 total_tracks=int(detail.get("total_tracks", len(tracks))),
                                 disc_number=int(t.get("disc_number", 1)),
                                 year=str(detail.get("release_date", ""))[:4],
+                                genre=sp_genre,
+                                genres=[sp_genre] if sp_genre else [],
                                 duration_seconds=float(t.get("duration_ms", 0)) / 1000.0,
                                 cover_url=cover_url,
                                 source="Spotify",
@@ -1074,10 +1112,10 @@ class SpotifyProvider:
                     results.append(
                         UnifiedAlbumMetadata(
                             album=detail.get("name", album),
-                            artist=", ".join(a.get("name") for a in detail.get("artists", [])) or artist,
+                            artist=sp_artist,
                             year=str(detail.get("release_date", "")),
-                            genres=detail.get("genres", []),
-                            genre=", ".join(detail.get("genres", [])[:2]),
+                            genres=[sp_genre] if sp_genre else detail.get("genres", []),
+                            genre=sp_genre,
                             total_tracks=int(detail.get("total_tracks", len(tracks))),
                             cover_url=cover_url,
                             tracks=tracks,
@@ -1100,7 +1138,7 @@ class SpotifyProvider:
         url = f"https://api.spotify.com/v1/search?q={urllib.parse.quote(query)}&type=track&limit=3"
 
         try:
-            headers = {"Authorization": f"Bearer {token}"}
+            headers = {"Authorization": f"Bearer {token}", "Accept-Language": "en-US,en;q=0.9"}
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
@@ -1109,11 +1147,19 @@ class SpotifyProvider:
                 for t in items[:3]:
                     images = t.get("album", {}).get("images", [])
                     cover_url = images[0].get("url") if images else ""
+                    trk_artist = ", ".join(a.get("name") for a in t.get("artists", [])) or artist
+                    trk_genre = resolve_fallback_genre(
+                        trk_artist,
+                        t.get("album", {}).get("name", ""),
+                        "",
+                    )
                     results.append(
                         UnifiedTrackMetadata(
                             title=t.get("name", title),
-                            artist=", ".join(a.get("name") for a in t.get("artists", [])) or artist,
+                            artist=trk_artist,
                             album=t.get("album", {}).get("name", ""),
+                            genre=trk_genre,
+                            genres=[trk_genre] if trk_genre else [],
                             duration_seconds=float(t.get("duration_ms", 0)) / 1000.0,
                             isrc=t.get("external_ids", {}).get("isrc", ""),
                             cover_url=cover_url,
@@ -1181,6 +1227,13 @@ class DiscogsProvider:
                     images = detail.get("images", [])
                     cover_url = images[0].get("resource_url") if images else ""
 
+                    disc_artist = detail.get("artists_sort") or artist
+                    disc_genre = resolve_fallback_genre(
+                        disc_artist,
+                        detail.get("title", album),
+                        ", ".join(genres[:2]),
+                    )
+
                     tracks: List[UnifiedTrackMetadata] = []
                     for trk in detail.get("tracklist", []):
                         dur_str = trk.get("duration", "")
@@ -1193,10 +1246,12 @@ class DiscogsProvider:
                         tracks.append(
                             UnifiedTrackMetadata(
                                 title=trk.get("title", ""),
-                                artist=detail.get("artists_sort") or artist,
+                                artist=disc_artist,
                                 album=detail.get("title", album),
                                 track_number=len(tracks) + 1,
                                 duration_seconds=dur_sec,
+                                genre=disc_genre,
+                                genres=[disc_genre] if disc_genre else [],
                                 producers=producers,
                                 composers=composers,
                                 arrangers=arrangers,
@@ -1207,10 +1262,10 @@ class DiscogsProvider:
                     results.append(
                         UnifiedAlbumMetadata(
                             album=detail.get("title", album),
-                            artist=detail.get("artists_sort") or artist,
+                            artist=disc_artist,
                             year=str(detail.get("year", "")),
-                            genres=genres,
-                            genre=", ".join(genres[:2]),
+                            genres=[disc_genre] if disc_genre else genres,
+                            genre=disc_genre,
                             total_tracks=len(tracks),
                             cover_url=cover_url,
                             tracks=tracks,

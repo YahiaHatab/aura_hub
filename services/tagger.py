@@ -187,6 +187,11 @@ def apply_unified_metadata_to_file(
     effective_cover = cover_bytes or track.cover_bytes
     ext = path.suffix.lower()
 
+    # Always ensure genre is normalized to English (never Arabic script)
+    raw_genre = track.genre or (", ".join(track.genres[:2]) if track.genres else "")
+    effective_genre = resolve_fallback_genre(track.artist, track.album, raw_genre)
+    track.genre = effective_genre
+
     try:
         # 1. MP3 (ID3v2.3)
         if ext == ".mp3":
@@ -224,10 +229,9 @@ def apply_unified_metadata_to_file(
                 audio.delall("TDRC")
                 audio.add(TDRC(encoding=3, text=str(track.year)))
 
-            genre_val = track.genre or (", ".join(track.genres[:2]) if track.genres else "")
-            if genre_val:
+            if effective_genre:
                 audio.delall("TCON")
-                audio.add(TCON(encoding=3, text=genre_val))
+                audio.add(TCON(encoding=3, text=effective_genre))
 
             if track.composers:
                 audio.delall("TCOM")
@@ -294,9 +298,8 @@ def apply_unified_metadata_to_file(
                 audio["date"] = [str(track.year)]
                 audio["year"] = [str(track.year)[:4]]
 
-            genre_val = track.genre or (", ".join(track.genres[:2]) if track.genres else "")
-            if genre_val:
-                audio["genre"] = [genre_val]
+            if effective_genre:
+                audio["genre"] = [effective_genre]
 
             if track.composers:
                 audio["composer"] = [", ".join(track.composers)]
@@ -346,9 +349,8 @@ def apply_unified_metadata_to_file(
             if track.year:
                 audio["date"] = [str(track.year)]
 
-            genre_val = track.genre or (", ".join(track.genres[:2]) if track.genres else "")
-            if genre_val:
-                audio["genre"] = [genre_val]
+            if effective_genre:
+                audio["genre"] = [effective_genre]
 
             if track.composers:
                 audio["composer"] = [", ".join(track.composers)]
@@ -395,9 +397,8 @@ def apply_unified_metadata_to_file(
             if track.year:
                 audio["\xa9day"] = [str(track.year)]
 
-            genre_val = track.genre or (", ".join(track.genres[:2]) if track.genres else "")
-            if genre_val:
-                audio["\xa9gen"] = [genre_val]
+            if effective_genre:
+                audio["\xa9gen"] = [effective_genre]
 
             if track.composers:
                 audio["\xa9wrt"] = [", ".join(track.composers)]
@@ -496,8 +497,11 @@ def apply_unified_metadata_to_album(
             matched_track.total_tracks = album.total_tracks or len(files)
         if not matched_track.year:
             matched_track.year = album.year
-        if not matched_track.genre:
-            matched_track.genre = effective_genre
+        matched_track.genre = resolve_fallback_genre(
+            matched_track.artist or album.artist,
+            matched_track.album or album.album,
+            matched_track.genre or effective_genre,
+        )
         if not matched_track.producers and album.producers:
             matched_track.producers = album.producers
         if not matched_track.composers and album.composers:
@@ -1001,7 +1005,9 @@ def tag_playlist_hybrid(
         mb_trk = search_musicbrainz_track(title_q, artist_q)
         resolved_title = mb_trk.get("title") or title_q
         resolved_artist = mb_trk.get("artist") or artist_q
-        resolved_genre = mb_trk.get("genre") or ""
+        resolved_genre = resolve_fallback_genre(
+            resolved_artist, resolved_title, mb_trk.get("genre") or ""
+        )
 
         song = None
         if genius:

@@ -14,7 +14,14 @@ import secrets
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
+import mutagen
+from mutagen.flac import FLAC
+from mutagen.id3 import ID3, ID3NoHeaderError
+from mutagen.mp4 import MP4
+from mutagen.oggopus import OggOpus
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +37,12 @@ from services.library_browser import (
     remove_album,
     resolve_album_cover,
 )
+from services.metadata import (
+    UnifiedAlbumMetadata,
+    UnifiedTrackMetadata,
+    search_album_metadata_candidates_async,
+    search_track_metadata_candidates_async,
+)
 from services.navidrome import navidrome_client
 from services.requests import (
     clear_completed_requests,
@@ -38,6 +51,11 @@ from services.requests import (
     handle_request_action,
 )
 from services.system import get_album_folders, get_disk_metrics, get_system_diagnostic_summary
+from services.tagger import (
+    apply_unified_metadata_to_album,
+    apply_unified_metadata_to_file,
+    write_loose_cover,
+)
 from services.tasks import get_all_tasks, start_download_task
 
 logger = logging.getLogger(__name__)
@@ -230,6 +248,198 @@ class FolderActionPayload(BaseModel):
 
 class ClearRequestsPayload(BaseModel):
     status: Optional[str] = "completed_only"
+
+
+class ApplyMetadataPayload(BaseModel):
+    path: str = Field(..., min_length=1)
+    type: Optional[str] = "album"  # "album" or "track"
+    candidate: Optional[Dict[str, Any]] = None
+    album_data: Optional[Dict[str, Any]] = None
+    track_data: Optional[Dict[str, Any]] = None
+    rescan: Optional[bool] = True
+
+
+def resolve_safe_path(rel_or_abs_path: str) -> Path:
+    """Safely resolves an album folder or audio file path within the music library."""
+    base = config.BASE_DOWNLOAD_DIR.resolve()
+    cleaned = rel_or_abs_path.strip().lstrip("/\\")
+    target = (base / cleaned).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        abs_target = Path(rel_or_abs_path).resolve()
+        try:
+            abs_target.relative_to(base)
+            target = abs_target
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Path traversal forbidden: Target path is outside music library.",
+            )
+    if not target.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Target path not found: {cleaned}",
+        )
+    return target
+
+
+def inspect_audio_file(file_path: Path) -> Dict[str, Any]:
+    """Inspects Vorbis, ID3, or MP4 tags and lyrics of an individual audio track."""
+    ext = file_path.suffix.lower()
+    info = {
+        "filename": file_path.name,
+        "format": ext.lstrip("."),
+        "title": file_path.stem,
+        "artist": "",
+        "album_artist": "",
+        "album": "",
+        "year": "",
+        "genre": "",
+        "track_number": 1,
+        "total_tracks": 1,
+        "disc_number": 1,
+        "duration_seconds": 0.0,
+        "composers": [],
+        "producers": [],
+        "has_embedded_cover": False,
+        "has_lyrics": False,
+        "has_lrc": file_path.with_suffix(".lrc").is_file(),
+    }
+
+    try:
+        mut_file = mutagen.File(str(file_path))
+        if mut_file and mut_file.info:
+            info["duration_seconds"] = round(float(mut_file.info.length), 1)
+    except Exception:
+        pass
+
+    try:
+        if ext == ".mp3":
+            try:
+                id3 = ID3(str(file_path))
+                if "TIT2" in id3: info["title"] = str(id3["TIT2"].text[0])
+                if "TPE1" in id3: info["artist"] = str(id3["TPE1"].text[0])
+                if "TPE2" in id3: info["album_artist"] = str(id3["TPE2"].text[0])
+                if "TALB" in id3: info["album"] = str(id3["TALB"].text[0])
+                if "TDRC" in id3: info["year"] = str(id3["TDRC"].text[0])
+                if "TCON" in id3: info["genre"] = str(id3["TCON"].text[0])
+                if "TRCK" in id3:
+                    trck = str(id3["TRCK"].text[0])
+                    if "/" in trck:
+                        p = trck.split("/", 1)
+                        if p[0].isdigit(): info["track_number"] = int(p[0])
+                        if p[1].isdigit(): info["total_tracks"] = int(p[1])
+                    elif trck.isdigit():
+                        info["track_number"] = int(trck)
+                if "TCOM" in id3:
+                    info["composers"] = [c.strip() for c in str(id3["TCOM"].text[0]).split(",") if c.strip()]
+                for txxx in id3.getall("TXXX"):
+                    if txxx.desc.upper() == "PRODUCER":
+                        info["producers"] = [p.strip() for p in str(txxx.text[0]).split(",") if p.strip()]
+                info["has_embedded_cover"] = bool(id3.getall("APIC"))
+                info["has_lyrics"] = bool(id3.getall("USLT"))
+            except ID3NoHeaderError:
+                pass
+        elif ext == ".flac":
+            fl = FLAC(str(file_path))
+            if "title" in fl and fl["title"]: info["title"] = fl["title"][0]
+            if "artist" in fl and fl["artist"]: info["artist"] = fl["artist"][0]
+            if "albumartist" in fl and fl["albumartist"]: info["album_artist"] = fl["albumartist"][0]
+            if "album" in fl and fl["album"]: info["album"] = fl["album"][0]
+            if "date" in fl and fl["date"]: info["year"] = fl["date"][0][:4]
+            if "genre" in fl and fl["genre"]: info["genre"] = fl["genre"][0]
+            if "tracknumber" in fl and fl["tracknumber"] and fl["tracknumber"][0].isdigit():
+                info["track_number"] = int(fl["tracknumber"][0])
+            if "totaltracks" in fl and fl["totaltracks"] and fl["totaltracks"][0].isdigit():
+                info["total_tracks"] = int(fl["totaltracks"][0])
+            if "composer" in fl: info["composers"] = fl["composer"]
+            if "producer" in fl: info["producers"] = fl["producer"]
+            info["has_embedded_cover"] = bool(fl.pictures)
+            info["has_lyrics"] = "lyrics" in fl
+        elif ext == ".opus":
+            op = OggOpus(str(file_path))
+            if "title" in op and op["title"]: info["title"] = op["title"][0]
+            if "artist" in op and op["artist"]: info["artist"] = op["artist"][0]
+            if "albumartist" in op and op["albumartist"]: info["album_artist"] = op["albumartist"][0]
+            if "album" in op and op["album"]: info["album"] = op["album"][0]
+            if "date" in op and op["date"]: info["year"] = op["date"][0][:4]
+            if "genre" in op and op["genre"]: info["genre"] = op["genre"][0]
+            if "tracknumber" in op and op["tracknumber"] and op["tracknumber"][0].isdigit():
+                info["track_number"] = int(op["tracknumber"][0])
+            if "totaltracks" in op and op["totaltracks"] and op["totaltracks"][0].isdigit():
+                info["total_tracks"] = int(op["totaltracks"][0])
+            if "composer" in op: info["composers"] = op["composer"]
+            if "producer" in op: info["producers"] = op["producer"]
+            info["has_embedded_cover"] = "metadata_block_picture" in op
+            info["has_lyrics"] = "lyrics" in op
+        elif ext == ".m4a":
+            mp = MP4(str(file_path))
+            if "\xa9nam" in mp and mp["\xa9nam"]: info["title"] = mp["\xa9nam"][0]
+            if "\xa9ART" in mp and mp["\xa9ART"]: info["artist"] = mp["\xa9ART"][0]
+            if "aART" in mp and mp["aART"]: info["album_artist"] = mp["aART"][0]
+            if "\xa9alb" in mp and mp["\xa9alb"]: info["album"] = mp["\xa9alb"][0]
+            if "\xa9day" in mp and mp["\xa9day"]: info["year"] = str(mp["\xa9day"][0])[:4]
+            if "\xa9gen" in mp and mp["\xa9gen"]: info["genre"] = mp["\xa9gen"][0]
+            if "trkn" in mp and mp["trkn"]:
+                info["track_number"] = mp["trkn"][0][0]
+                info["total_tracks"] = mp["trkn"][0][1]
+            if "\xa9wrt" in mp and mp["\xa9wrt"]: info["composers"] = [mp["\xa9wrt"][0]]
+            info["has_embedded_cover"] = "covr" in mp
+            info["has_lyrics"] = "\xa9lyr" in mp
+    except Exception as e:
+        logger.debug(f"Error reading tags from {file_path.name}: {e}")
+
+    return info
+
+
+def inspect_folder(folder_path: Path) -> Dict[str, Any]:
+    """Inspects audio files in an album folder to produce an aggregated metadata overview."""
+    valid_exts = {".mp3", ".flac", ".opus", ".m4a"}
+    audio_files = sorted(
+        [p for p in folder_path.glob("*") if p.is_file() and p.suffix.lower() in valid_exts],
+        key=lambda x: x.name,
+    )
+    inspected_tracks = [inspect_audio_file(f) for f in audio_files]
+
+    album_name = folder_path.name
+    artist_name = folder_path.parent.name if folder_path.parent != config.BASE_DOWNLOAD_DIR else ""
+    album_artist_name = artist_name
+    year = ""
+    genre = ""
+
+    for t in inspected_tracks:
+        if t["album"] and not album_name:
+            album_name = t["album"]
+        if t["artist"] and not artist_name:
+            artist_name = t["artist"]
+        if t["album_artist"] and not album_artist_name:
+            album_artist_name = t["album_artist"]
+        if t["year"] and not year:
+            year = t["year"]
+        if t["genre"] and not genre:
+            genre = t["genre"]
+
+    has_loose_cover = False
+    for cov_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png"):
+        if (folder_path / cov_name).is_file():
+            has_loose_cover = True
+            break
+
+    lrc_count = sum(1 for t in inspected_tracks if t["has_lrc"])
+
+    return {
+        "folder": str(folder_path.relative_to(config.BASE_DOWNLOAD_DIR)),
+        "album": album_name,
+        "artist": artist_name,
+        "album_artist": album_artist_name or artist_name,
+        "year": year,
+        "genre": genre,
+        "track_count": len(inspected_tracks),
+        "has_cover": has_loose_cover or any(t["has_embedded_cover"] for t in inspected_tracks),
+        "lrc_count": lrc_count,
+        "tracks": inspected_tracks,
+    }
 
 
 # ================= STATIC & DASHBOARD ROUTES =================
@@ -528,6 +738,157 @@ async def get_system_api(admin_user: Dict[str, Any] = Depends(verify_admin_user)
 
     data = await loop.run_in_executor(None, _collect)
     return data
+
+
+# ----- METADATA AGGREGATOR & TAG EDITOR API -----
+@api_router.get("/metadata/search")
+async def search_metadata_api(
+    query: str,
+    type: str = "album",
+    artist: str = "",
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Queries all configured metadata backends (MusicBrainz, Deezer, iTunes, Spotify, Discogs)
+
+    and returns ranked candidates with confidence scores and recommendation flags.
+    """
+    clean_q = query.strip()
+    clean_art = artist.strip()
+    if not clean_q:
+        raise HTTPException(status_code=400, detail="Missing required query parameter.")
+
+    if type.lower() == "track":
+        candidates = await search_track_metadata_candidates_async(
+            title=clean_q,
+            artist=clean_art,
+        )
+    else:
+        candidates = await search_album_metadata_candidates_async(
+            album_name=clean_q,
+            artist_name=clean_art,
+        )
+
+    return {
+        "ok": True,
+        "query": clean_q,
+        "artist": clean_art,
+        "type": type.lower(),
+        "count": len(candidates),
+        "candidates": [c.to_dict() for c in candidates],
+    }
+
+
+@api_router.get("/metadata/inspect")
+async def inspect_metadata_api(
+    path: str,
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Inspects existing audio metadata, ID3/Vorbis tags, artwork, and lyrics of a library item."""
+    target = resolve_safe_path(path)
+    loop = asyncio.get_running_loop()
+
+    if target.is_file():
+        meta = await loop.run_in_executor(None, lambda: inspect_audio_file(target))
+        return {
+            "ok": True,
+            "path": str(target.relative_to(config.BASE_DOWNLOAD_DIR)),
+            "type": "track",
+            "metadata": meta,
+        }
+    elif target.is_dir():
+        meta = await loop.run_in_executor(None, lambda: inspect_folder(target))
+        return {
+            "ok": True,
+            "path": str(target.relative_to(config.BASE_DOWNLOAD_DIR)),
+            "type": "album",
+            "metadata": meta,
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Target is neither a file nor a directory.")
+
+
+@api_router.post("/metadata/apply")
+async def apply_metadata_api(
+    payload: ApplyMetadataPayload,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Applies user-selected candidate metadata and artwork to target album folder or track."""
+    target = resolve_safe_path(payload.path)
+    loop = asyncio.get_running_loop()
+
+    is_album = target.is_dir() or payload.type == "album"
+
+    if is_album:
+        raw_album = payload.album_data or (payload.candidate.get("album_data") if payload.candidate else None)
+        if not raw_album and payload.candidate:
+            raw_album = payload.candidate
+        if not raw_album or not isinstance(raw_album, dict):
+            raise HTTPException(status_code=400, detail="Missing album metadata payload.")
+
+        album_meta = UnifiedAlbumMetadata.from_dict(raw_album)
+
+        # Download high-res cover bytes if URL is available
+        if not album_meta.cover_bytes and album_meta.cover_url:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(album_meta.cover_url)
+                    if resp.status_code == 200:
+                        album_meta.cover_bytes = resp.content
+            except Exception as e:
+                logger.debug(f"Failed to fetch candidate cover image: {e}")
+
+        summary = await loop.run_in_executor(
+            None, lambda: apply_unified_metadata_to_album(target, album_meta)
+        )
+
+        if payload.rescan:
+            asyncio.create_task(loop.run_in_executor(None, navidrome_client.start_scan))
+
+        return {
+            "ok": True,
+            "message": f"Successfully applied metadata to {album_meta.album or target.name}",
+            "summary": summary,
+        }
+    else:
+        raw_track = payload.track_data or (payload.candidate.get("track_data") if payload.candidate else None)
+        if not raw_track and payload.candidate:
+            raw_track = payload.candidate
+        if not raw_track or not isinstance(raw_track, dict):
+            raise HTTPException(status_code=400, detail="Missing track metadata payload.")
+
+        track_meta = UnifiedTrackMetadata.from_dict(raw_track)
+
+        cover_bytes = None
+        if track_meta.cover_url:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(track_meta.cover_url)
+                    if resp.status_code == 200:
+                        cover_bytes = resp.content
+            except Exception as e:
+                logger.debug(f"Failed to fetch track candidate cover: {e}")
+
+        success = await loop.run_in_executor(
+            None, lambda: apply_unified_metadata_to_file(target, track_meta, cover_bytes=cover_bytes)
+        )
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to apply tags to audio file.")
+
+        lrc_path = target.with_suffix(".lrc")
+        if track_meta.lyrics_synced and not lrc_path.exists():
+            try:
+                lrc_path.write_text(track_meta.lyrics_synced, encoding="utf-8")
+            except Exception:
+                pass
+
+        if payload.rescan:
+            asyncio.create_task(loop.run_in_executor(None, navidrome_client.start_scan))
+
+        return {
+            "ok": True,
+            "message": f"Successfully tagged {target.name}",
+            "summary": track_meta.to_dict(),
+        }
 
 
 # Mount API routes under both /api and /hub/api to support reverse proxy subpaths

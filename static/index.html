@@ -1049,12 +1049,309 @@
       display: block;
     }
 
-    /* Role visibility rules */
-    .admin-only {
+    /* =================================================== */
+    /* TAG EDITOR & METADATA SELECTOR STYLES               */
+    /* =================================================== */
+    .metadata-toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .metadata-segmented-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: var(--radius-pill);
+      background: var(--pill-bg);
+      border: 1px solid var(--pill-border);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s ease;
+    }
+    .metadata-segmented-btn.active {
+      background: #ffffff;
+      color: #000000;
+      border-color: #ffffff;
+      box-shadow: 0 2px 10px rgba(255, 255, 255, 0.15);
+    }
+
+    .inspect-card {
+      background: linear-gradient(180deg, rgba(22, 24, 30, 0.9) 0%, rgba(14, 15, 18, 0.95) 100%);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-card);
+      padding: 16px;
+      margin-bottom: 16px;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      position: relative;
+    }
+
+    .inspect-art-thumb {
+      width: 64px;
+      height: 64px;
+      border-radius: var(--radius-thumb);
+      background: #181920;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      flex-shrink: 0;
+      object-fit: cover;
+    }
+
+    .inspect-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .inspect-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .inspect-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .inspect-tags-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 6px;
+    }
+
+    .candidate-card {
+      background: var(--card-bg);
+      border: 1.5px solid var(--card-border);
+      border-radius: var(--radius-card);
+      padding: 16px;
+      margin-bottom: 12px;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .candidate-card:hover {
+      border-color: rgba(255, 255, 255, 0.22);
+      transform: translateY(-1px);
+    }
+
+    .candidate-card.selected {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: #ffffff;
+      box-shadow: 0 0 0 1px #ffffff, 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+
+    .candidate-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .candidate-provider-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .candidate-header-badges {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .confidence-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: var(--radius-pill);
+      letter-spacing: -0.01em;
+    }
+    .confidence-high { background: rgba(52, 211, 153, 0.18); color: var(--success); border: 1px solid rgba(52, 211, 153, 0.35); }
+    .confidence-med { background: rgba(251, 191, 36, 0.18); color: var(--warning); border: 1px solid rgba(251, 191, 36, 0.35); }
+    .confidence-low { background: rgba(255, 255, 255, 0.1); color: var(--text-muted); border: 1px solid var(--card-border); }
+
+    .recommended-ribbon {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      color: #000000;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: var(--radius-pill);
+      box-shadow: 0 0 10px rgba(251, 191, 36, 0.4);
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .candidate-body {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .candidate-art-thumb {
+      width: 58px;
+      height: 58px;
+      border-radius: var(--radius-thumb);
+      background: #181920;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      flex-shrink: 0;
+      object-fit: cover;
+    }
+
+    .candidate-details {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .candidate-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 15px;
+      font-weight: 700;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .candidate-artist-line {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .candidate-badges-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 8px;
+    }
+
+    .tag-badge {
+      font-size: 10px;
+      font-weight: 500;
+      padding: 2px 7px;
+      border-radius: var(--radius-pill);
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .tag-badge.badge-present {
+      color: #e4e4e7;
+      border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .candidate-radio-indicator {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.2s ease;
+      margin-left: 8px;
+    }
+    .candidate-card.selected .candidate-radio-indicator {
+      border-color: #ffffff;
+      background: #ffffff;
+    }
+    .candidate-radio-indicator::after {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #000000;
       display: none;
     }
-    body.is-admin .admin-only {
+    .candidate-card.selected .candidate-radio-indicator::after {
       display: block;
+    }
+
+    .candidate-tracklist-drawer {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 11px;
+      color: var(--text-muted);
+      max-height: 180px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      display: none;
+    }
+    .candidate-tracklist-drawer.open {
+      display: block;
+    }
+
+    .candidate-track-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+    }
+
+    .tagger-apply-sticky-bar {
+      position: sticky;
+      bottom: 80px;
+      background: rgba(14, 15, 18, 0.94);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border-focus);
+      border-radius: var(--radius-card);
+      padding: 14px 18px;
+      margin-top: 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      z-index: 40;
+    }
+
+    /* Role visibility rules */
+    .admin-only {
+      display: none !important;
+    }
+    body.is-admin .admin-only {
+      display: block !important;
+    }
+    body.is-admin .nav-item.admin-only {
+      display: flex !important;
+    }
+    body.is-admin .filter-pill.admin-only {
+      display: inline-flex !important;
     }
   </style>
 </head>
@@ -1085,6 +1382,7 @@
       <button class="filter-pill admin-only" onclick="switchTab('tabIngest')">Ingest</button>
       <button class="filter-pill" onclick="switchTab('tabRequests')">Requests</button>
       <button class="filter-pill" onclick="switchTab('tabLibrary')">Library</button>
+      <button class="filter-pill admin-only" onclick="switchTab('tabMetadata')">Tagger</button>
       <button class="filter-pill admin-only" onclick="switchTab('tabUsers')">Users</button>
       <button class="filter-pill admin-only" onclick="switchTab('tabServer')">Server</button>
     </div>
@@ -1248,6 +1546,88 @@
       </div>
     </div>
 
+    <!-- TAB 5: METADATA SELECTOR / TAG EDITOR (Admin Only) -->
+    <div class="tab-content" id="tabMetadata">
+      <div class="section-browse-header">
+        <div>
+          <div class="section-tag-title">metadata & tagger</div>
+          <div class="section-tag-desc">multi-source aggregator & unified tag writer</div>
+        </div>
+        <button class="section-action-btn" id="btnResetTagger">clear ↺</button>
+      </div>
+
+      <!-- Mode Selector -->
+      <div class="metadata-toolbar">
+        <button class="metadata-segmented-btn active" id="btnModeLibrary" onclick="setTaggerSource('library')">
+          📁 Library Folder
+        </button>
+        <button class="metadata-segmented-btn" id="btnModeCustom" onclick="setTaggerSource('custom')">
+          🔍 Custom Search
+        </button>
+      </div>
+
+      <!-- Library Selection Panel -->
+      <div class="card" id="taggerLibraryPanel" style="margin-bottom: 14px;">
+        <label class="form-label" for="taggerAlbumSelect">Select Library Folder to Retag</label>
+        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+          <select id="taggerAlbumSelect" class="form-input" style="flex: 1; cursor: pointer;">
+            <option value="">-- Choose an indexed album folder --</option>
+          </select>
+          <button class="btn btn-translucent" style="padding: 0 14px; white-space: nowrap;" id="btnInspectFolder">
+            Inspect
+          </button>
+        </div>
+
+        <!-- Current Tag Health & Inspection Preview -->
+        <div id="taggerInspectionContainer" style="display: none;"></div>
+      </div>
+
+      <!-- Custom Search Panel (Initially Hidden) -->
+      <div class="card" id="taggerCustomPanel" style="display: none; margin-bottom: 14px;">
+        <div class="form-group">
+          <label class="form-label" for="taggerCustomTitle">Album Name or Track Title</label>
+          <input type="text" id="taggerCustomTitle" class="form-input" placeholder="e.g. Saharna Ya Leil or Fancy that">
+        </div>
+        <div class="form-group" style="margin-bottom: 12px;">
+          <label class="form-label" for="taggerCustomArtist">Artist Name (Optional but Recommended)</label>
+          <input type="text" id="taggerCustomArtist" class="form-input" placeholder="e.g. Elissa or PinkPantheress">
+        </div>
+        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; color: var(--text-muted);">
+            <input type="radio" name="taggerTypeRadio" value="album" checked> Album Release
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; color: var(--text-muted);">
+            <input type="radio" name="taggerTypeRadio" value="track"> Single Track
+          </label>
+        </div>
+      </div>
+
+      <!-- Search Trigger Action -->
+      <div style="margin-bottom: 18px;">
+        <button class="btn btn-solid-white btn-full" id="btnFetchCandidates">
+          <span>⚡</span> Query Metadata Providers
+        </button>
+      </div>
+
+      <!-- Candidates Container -->
+      <div id="metadataCandidatesContainer">
+        <div style="text-align: center; color: var(--text-dim); padding: 36px 14px; font-size: 13px;">
+          Select a library folder or enter details above to query MusicBrainz, Deezer, iTunes, Spotify, and Discogs.
+        </div>
+      </div>
+
+      <!-- Sticky Apply Footer Bar (Shows when a candidate is selected) -->
+      <div class="tagger-apply-sticky-bar" id="taggerApplyBar" style="display: none;">
+        <div style="min-width: 0; flex: 1;">
+          <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Selected Source</div>
+          <div style="font-size: 13px; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="selectedSourceLabel">--</div>
+        </div>
+        <button class="btn btn-solid-white" style="padding: 10px 18px; font-weight: 700; white-space: nowrap;" id="btnApplyMetadata">
+          <span>💾</span> Apply & Save
+        </button>
+      </div>
+    </div>
+
     <!-- TAB 5: USER MANAGEMENT (Admin Only) -->
     <div class="tab-content" id="tabUsers">
       <div class="section-browse-header">
@@ -1370,6 +1750,10 @@
     <button class="nav-item" data-tab="tabLibrary">
       <span class="nav-icon">📚</span>
       <span>Library</span>
+    </button>
+    <button class="nav-item admin-only" data-tab="tabMetadata">
+      <span class="nav-icon">🏷️</span>
+      <span>Tagger</span>
     </button>
     <button class="nav-item admin-only" data-tab="tabUsers">
       <span class="nav-icon">👥</span>
@@ -1522,6 +1906,7 @@
       else if (targetTabId === 'tabIngest') fetchTasks();
       else if (targetTabId === 'tabRequests') fetchRequests();
       else if (targetTabId === 'tabLibrary') fetchLibrary();
+      else if (targetTabId === 'tabMetadata') initMetadataTab();
       else if (targetTabId === 'tabUsers') fetchUsers();
       else if (targetTabId === 'tabServer') fetchSystem();
     }
@@ -1903,8 +2288,11 @@
 
         const adminActions = currentUser.is_admin ? `
           <div class="album-poster-actions">
+            <button class="btn btn-solid-white btn-sm" style="flex:1; padding: 4px 6px; font-size: 10px;" onclick="openTaggerForAlbum('${a.folder.replace(/'/g, "\\'")}')">
+              🏷️ Retag
+            </button>
             <button class="btn btn-translucent btn-sm" style="flex:1; padding: 4px 6px; font-size: 10px;" onclick="refetchLyrics('${a.folder.replace(/'/g, "\\'")}')">
-              🎤 Refetch
+              🎤 LRC
             </button>
             <button class="btn btn-danger-pill btn-sm" style="padding: 4px 8px; font-size: 10px;" onclick="deleteAlbum('${a.folder.replace(/'/g, "\\'")}')">
               🗑️
@@ -2095,6 +2483,384 @@
     document.getElementById('btnRefreshLibrary').addEventListener('click', () => {
       haptic('impact', 'light');
       fetchLibrary();
+    });
+
+    // ===================================================
+    // 7. METADATA SELECTOR & TAG EDITOR LOGIC
+    // ===================================================
+    let taggerSourceMode = 'library';
+    let currentTaggerTarget = '';
+    let fetchedCandidates = [];
+    let selectedCandidateIndex = -1;
+
+    function setTaggerSource(mode) {
+      taggerSourceMode = mode;
+      document.getElementById('btnModeLibrary')?.classList.toggle('active', mode === 'library');
+      document.getElementById('btnModeCustom')?.classList.toggle('active', mode === 'custom');
+      const libPanel = document.getElementById('taggerLibraryPanel');
+      const custPanel = document.getElementById('taggerCustomPanel');
+      if (libPanel) libPanel.style.display = (mode === 'library') ? 'block' : 'none';
+      if (custPanel) custPanel.style.display = (mode === 'custom') ? 'block' : 'none';
+    }
+
+    async function initMetadataTab() {
+      const select = document.getElementById('taggerAlbumSelect');
+      if (!select) return;
+
+      if (cachedAlbums.length === 0) {
+        try {
+          const data = await apiRequest('api/library');
+          cachedAlbums = data.albums || [];
+        } catch (e) {}
+      }
+
+      const prevVal = select.value || currentTaggerTarget;
+      select.innerHTML = '<option value="">-- Choose an indexed album folder --</option>';
+      cachedAlbums.forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a.folder;
+        opt.textContent = `${a.artist} - ${a.album} (${a.track_count} tracks)`;
+        select.appendChild(opt);
+      });
+
+      if (prevVal) {
+        select.value = prevVal;
+      }
+    }
+
+    async function openTaggerForAlbum(folder) {
+      haptic('impact', 'medium');
+      currentTaggerTarget = folder;
+      setTaggerSource('library');
+      switchTab('tabMetadata');
+      await initMetadataTab();
+      const select = document.getElementById('taggerAlbumSelect');
+      if (select) select.value = folder;
+      await inspectAndFetchForFolder(folder);
+    }
+
+    async function inspectAndFetchForFolder(folder) {
+      if (!folder) return;
+      currentTaggerTarget = folder;
+      const inspectBox = document.getElementById('taggerInspectionContainer');
+      if (inspectBox) {
+        inspectBox.style.display = 'block';
+        inspectBox.innerHTML = '<div class="spinner"></div>';
+      }
+
+      try {
+        const res = await apiRequest(`api/metadata/inspect?path=${encodeURIComponent(folder)}`);
+        if (res.ok && res.metadata) {
+          renderInspectionData(res.metadata, folder);
+          if (res.metadata.album) {
+            const titleInput = document.getElementById('taggerCustomTitle');
+            if (titleInput) titleInput.value = res.metadata.album;
+          }
+          if (res.metadata.artist) {
+            const artistInput = document.getElementById('taggerCustomArtist');
+            if (artistInput) artistInput.value = res.metadata.artist;
+          }
+          await queryCandidates(res.metadata.album || folder, res.metadata.artist, 'album');
+        }
+      } catch (e) {
+        if (inspectBox) {
+          inspectBox.innerHTML = `<div style="color: var(--danger); font-size: 12px; padding: 8px;">Failed to inspect folder: ${e.message}</div>`;
+        }
+      }
+    }
+
+    function renderInspectionData(meta, folder) {
+      const inspectBox = document.getElementById('taggerInspectionContainer');
+      if (!inspectBox) return;
+      const coverUrl = `${getApiUrl('api/cover')}?path=${encodeURIComponent(folder)}`;
+      inspectBox.innerHTML = `
+        <div class="inspect-card">
+          <img src="${coverUrl}" class="inspect-art-thumb" alt="Cover" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 64 64\\'><rect width=\\'64\\' height=\\'64\\' fill=\\'%23121318\\'/><circle cx=\\'32\\' cy=\\'32\\' r=\\'20\\' fill=\\'%231a1b22\\'/></svg>';">
+          <div class="inspect-info">
+            <div class="inspect-title" title="${meta.album || 'Untitled'}">${meta.album || 'Untitled'}</div>
+            <div class="inspect-subtitle">👤 ${meta.artist || 'Unknown Artist'} • 📅 ${meta.year || 'N/A'}</div>
+            <div class="inspect-tags-row">
+              <span class="tag-badge badge-present">🏷️ ${meta.genre || 'Pop'}</span>
+              <span class="tag-badge">🎵 ${meta.track_count || 0} tracks</span>
+              <span class="tag-badge">${meta.lrc_count ? `🟢 ${meta.lrc_count} LRC` : '🔴 No LRC'}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function queryCandidates(query, artist = '', type = 'album') {
+      const container = document.getElementById('metadataCandidatesContainer');
+      const applyBar = document.getElementById('taggerApplyBar');
+      if (applyBar) applyBar.style.display = 'none';
+      selectedCandidateIndex = -1;
+
+      if (!container) return;
+      container.innerHTML = `
+        <div class="card" style="text-align: center; padding: 28px 16px;">
+          <div class="spinner"></div>
+          <div style="font-size: 13px; font-weight: 600; color: #ffffff; margin-top: 10px;">Aggregating Metadata Sources...</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Querying MusicBrainz, Deezer, iTunes, Spotify, Discogs</div>
+        </div>
+      `;
+
+      try {
+        const url = `api/metadata/search?query=${encodeURIComponent(query)}&artist=${encodeURIComponent(artist)}&type=${encodeURIComponent(type)}`;
+        const data = await apiRequest(url);
+        fetchedCandidates = data.candidates || [];
+
+        if (fetchedCandidates.length === 0) {
+          container.innerHTML = `
+            <div class="card" style="text-align: center; padding: 28px 16px;">
+              <div style="font-size: 32px; margin-bottom: 8px;">🔍</div>
+              <div style="font-size: 14px; font-weight: 700;">No Candidates Found</div>
+              <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">Try refining artist name or album keywords in Custom Search.</div>
+            </div>
+          `;
+          return;
+        }
+
+        renderCandidates(fetchedCandidates);
+      } catch (err) {
+        container.innerHTML = `
+          <div class="card" style="text-align: center; padding: 24px 16px; color: var(--danger);">
+            <div style="font-size: 13px; font-weight: 600;">Search Failed</div>
+            <div style="font-size: 12px; margin-top: 4px;">${err.message}</div>
+          </div>
+        `;
+      }
+    }
+
+    function renderCandidates(candidates) {
+      const container = document.getElementById('metadataCandidatesContainer');
+      if (!container) return;
+      let html = '';
+
+      candidates.forEach((cand, idx) => {
+        const p = cand.preview || {};
+        const conf = cand.confidence_score || 0;
+        let confClass = 'confidence-low';
+        if (conf >= 80) confClass = 'confidence-high';
+        else if (conf >= 55) confClass = 'confidence-med';
+
+        const recBadge = cand.is_recommended ? `<span class="recommended-ribbon">⭐️ Recommended</span>` : '';
+        const coverThumb = p.cover_thumbnail || (cand.album_data?.cover_url || cand.track_data?.cover_url) || '';
+        const coverImg = coverThumb
+          ? `<img src="${coverThumb}" class="candidate-art-thumb" alt="Artwork" onerror="this.style.display='none';">`
+          : `<div class="candidate-art-thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px;">💿</div>`;
+
+        const hasLyrics = p.has_lyrics ? `<span class="tag-badge badge-present">🎤 Lyrics</span>` : `<span class="tag-badge">No Lyrics</span>`;
+        const hasCover = p.has_cover ? `<span class="tag-badge badge-present">🖼️ Hi-Res Cover</span>` : `<span class="tag-badge">No Cover</span>`;
+        const hasCredits = (p.has_producers || p.has_composers) ? `<span class="tag-badge badge-present">👥 Full Credits</span>` : `<span class="tag-badge">Basic Credits</span>`;
+        const trackCountBadge = p.track_count ? `<span class="tag-badge">🎵 ${p.track_count} Tracks</span>` : '';
+
+        const tracksList = (cand.album_data?.tracks || []);
+        let tracksPreviewHtml = '';
+        if (tracksList.length > 0) {
+          tracksPreviewHtml = `
+            <div style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 11px; color: var(--text-dim); cursor: pointer;" onclick="event.stopPropagation(); toggleTracklist(${idx});">
+                📋 View Tracklist (${tracksList.length}) ▾
+              </span>
+            </div>
+            <div class="candidate-tracklist-drawer" id="tracklistDrawer_${idx}">
+              ${tracksList.slice(0, 15).map(t => `
+                <div class="candidate-track-row">
+                  <span>${t.track_number || ''}. ${t.title || 'Untitled'}</span>
+                  <span>${t.duration_seconds ? formatDuration(t.duration_seconds) : ''}</span>
+                </div>
+              `).join('')}
+              ${tracksList.length > 15 ? `<div style="text-align: center; padding-top: 4px; font-size: 10px; color: var(--text-dim);">+ ${tracksList.length - 15} more tracks</div>` : ''}
+            </div>
+          `;
+        }
+
+        html += `
+          <div class="candidate-card ${cand.is_recommended ? 'selected' : ''}" id="candCard_${idx}" onclick="selectCandidate(${idx})">
+            <div class="candidate-header-row">
+              <span class="candidate-provider-badge">
+                ${getProviderIcon(cand.source)} ${cand.source}
+              </span>
+              <div class="candidate-header-badges">
+                ${recBadge}
+                <span class="confidence-badge ${confClass}">${Math.round(conf)}% Match</span>
+              </div>
+            </div>
+
+            <div class="candidate-body">
+              ${coverImg}
+              <div class="candidate-details">
+                <div class="candidate-title" title="${p.title || p.album || 'Untitled'}">${p.title || p.album || 'Untitled'}</div>
+                <div class="candidate-artist-line">👤 ${p.artist || 'Unknown'} ${p.year ? `• 📅 ${p.year}` : ''}</div>
+                <div class="candidate-badges-row">
+                  <span class="tag-badge badge-present">🏷️ ${p.genres || 'Pop'}</span>
+                  ${trackCountBadge}
+                  ${hasCover}
+                  ${hasCredits}
+                  ${hasLyrics}
+                </div>
+              </div>
+              <div class="candidate-radio-indicator"></div>
+            </div>
+
+            ${tracksPreviewHtml}
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+
+      const recIdx = candidates.findIndex(c => c.is_recommended);
+      if (recIdx !== -1) {
+        selectCandidate(recIdx);
+      } else if (candidates.length > 0) {
+        selectCandidate(0);
+      }
+    }
+
+    function getProviderIcon(source) {
+      if (!source) return '💿';
+      const s = source.toLowerCase();
+      if (s.includes('musicbrainz')) return '⭐️';
+      if (s.includes('deezer')) return '🎧';
+      if (s.includes('itunes') || s.includes('apple')) return '🍎';
+      if (s.includes('spotify')) return '🟢';
+      if (s.includes('discogs')) return '📦';
+      return '💿';
+    }
+
+    function formatDuration(sec) {
+      if (!sec) return '';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function toggleTracklist(idx) {
+      const drawer = document.getElementById(`tracklistDrawer_${idx}`);
+      if (drawer) drawer.classList.toggle('open');
+    }
+
+    function selectCandidate(idx) {
+      haptic('impact', 'light');
+      selectedCandidateIndex = idx;
+      document.querySelectorAll('.candidate-card').forEach((card, i) => {
+        card.classList.toggle('selected', i === idx);
+      });
+
+      const cand = fetchedCandidates[idx];
+      const applyBar = document.getElementById('taggerApplyBar');
+      if (cand && applyBar) {
+        applyBar.style.display = 'flex';
+        const p = cand.preview || {};
+        const label = document.getElementById('selectedSourceLabel');
+        if (label) {
+          label.textContent = `${cand.source} — ${p.title || p.album || ''} (${Math.round(cand.confidence_score || 0)}%)`;
+        }
+      }
+    }
+
+    async function applySelectedMetadata() {
+      if (selectedCandidateIndex < 0 || !fetchedCandidates[selectedCandidateIndex]) {
+        showToast('Please select a candidate source first', 'warning');
+        return;
+      }
+
+      const targetPath = (taggerSourceMode === 'library')
+        ? document.getElementById('taggerAlbumSelect').value
+        : currentTaggerTarget;
+
+      if (!targetPath) {
+        showToast('Please choose or enter a library target folder to tag', 'error');
+        return;
+      }
+
+      const cand = fetchedCandidates[selectedCandidateIndex];
+      const btn = document.getElementById('btnApplyMetadata');
+      const origText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner" style="width:14px;height:14px;margin:0 6px 0 0;display:inline-block;vertical-align:middle;"></span> Applying...`;
+
+      haptic('impact', 'heavy');
+      showToast('⚡ Writing audio tags & synced lyrics...', 'warning');
+
+      try {
+        const payload = {
+          path: targetPath,
+          type: 'album',
+          candidate: cand,
+          album_data: cand.album_data,
+          track_data: cand.track_data,
+          rescan: true,
+        };
+
+        const res = await apiRequest('api/metadata/apply', 'POST', payload);
+        if (res.ok) {
+          haptic('notification', 'success');
+          showToast(`✅ ${res.message || 'Tags successfully applied!'}`, 'success');
+          if (taggerSourceMode === 'library') {
+            await inspectAndFetchForFolder(targetPath);
+          }
+          fetchLibrary();
+        } else {
+          showToast(res.detail || res.message || 'Tagging failed', 'error');
+        }
+      } catch (err) {
+        showToast(`Failed: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origText;
+      }
+    }
+
+    // Attach Tagger Event Listeners
+    document.getElementById('btnInspectFolder')?.addEventListener('click', () => {
+      const folder = document.getElementById('taggerAlbumSelect').value;
+      if (folder) inspectAndFetchForFolder(folder);
+      else showToast('Please select a folder first', 'warning');
+    });
+
+    document.getElementById('taggerAlbumSelect')?.addEventListener('change', (e) => {
+      if (e.target.value) inspectAndFetchForFolder(e.target.value);
+    });
+
+    document.getElementById('btnFetchCandidates')?.addEventListener('click', () => {
+      haptic('impact', 'light');
+      if (taggerSourceMode === 'library') {
+        const folder = document.getElementById('taggerAlbumSelect').value;
+        if (folder) inspectAndFetchForFolder(folder);
+        else showToast('Please select an album folder from library', 'warning');
+      } else {
+        const q = document.getElementById('taggerCustomTitle').value.trim();
+        const art = document.getElementById('taggerCustomArtist').value.trim();
+        const typeRadio = document.querySelector('input[name="taggerTypeRadio"]:checked');
+        const type = typeRadio ? typeRadio.value : 'album';
+        if (!q) {
+          showToast('Please enter an album or track title', 'warning');
+          return;
+        }
+        queryCandidates(q, art, type);
+      }
+    });
+
+    document.getElementById('btnApplyMetadata')?.addEventListener('click', applySelectedMetadata);
+
+    document.getElementById('btnResetTagger')?.addEventListener('click', () => {
+      haptic('impact', 'light');
+      document.getElementById('taggerAlbumSelect').value = '';
+      document.getElementById('taggerCustomTitle').value = '';
+      document.getElementById('taggerCustomArtist').value = '';
+      document.getElementById('taggerInspectionContainer').style.display = 'none';
+      document.getElementById('metadataCandidatesContainer').innerHTML = `
+        <div style="text-align: center; color: var(--text-dim); padding: 36px 14px; font-size: 13px;">
+          Select a library folder or enter details above to query MusicBrainz, Deezer, iTunes, Spotify, and Discogs.
+        </div>
+      `;
+      const applyBar = document.getElementById('taggerApplyBar');
+      if (applyBar) applyBar.style.display = 'none';
+      selectedCandidateIndex = -1;
+      fetchedCandidates = [];
+      currentTaggerTarget = '';
     });
 
     // Add User Modal
