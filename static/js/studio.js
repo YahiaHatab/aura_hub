@@ -208,7 +208,7 @@
     try {
       showToast('Inspecting metadata on disk...', 'info');
       const data = await apiRequest(`/api/studio/inspect?path=${encodeURIComponent(path)}`);
-      
+
       state.currentPath = data.path;
       state.isFolder = !!data.is_folder;
       state.albumMeta = {
@@ -381,7 +381,7 @@
     state.albumMeta.album_artist = document.getElementById('albumFieldArtist').value.trim();
     state.albumMeta.year = document.getElementById('albumFieldYear').value.trim();
     state.albumMeta.genre = document.getElementById('albumFieldGenre').value.trim();
-    
+
     const rawProds = document.getElementById('albumFieldProducers').value.trim();
     state.albumMeta.producers = rawProds ? rawProds.split(',').map(s => s.trim()).filter(Boolean) : [];
 
@@ -799,7 +799,7 @@
     try {
       document.getElementById('diffStatusNote').textContent = `Querying MusicBrainz, Deezer, Spotify, iTunes, Discogs, Genius, LRCLIB for "${cleanQ}"...`;
       const res = await apiRequest(`/api/studio/search-external?query=${encodeURIComponent(cleanQ)}&type=album&artist=${encodeURIComponent(artist.trim())}`);
-      
+
       state.candidates = res.candidates || [];
       document.getElementById('badgeCandidateCount').textContent = state.candidates.length;
       document.getElementById('badgeCandidateCount').style.display = state.candidates.length ? 'inline-block' : 'none';
@@ -831,7 +831,7 @@
     state.candidates.forEach((cand, idx) => {
       const card = document.createElement('div');
       card.className = `candidate-card ${idx === state.selectedCandidateIdx ? 'active' : ''}`;
-      
+
       const conf = Math.round(cand.confidence_score || 0);
       const isRec = cand.is_recommended;
       const prev = cand.preview || {};
@@ -1094,7 +1094,7 @@
     try {
       showToast(`Fetching lyrics for "${track.title}"...`, 'info');
       const res = await apiRequest(`/api/lyrics/fetch?track=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist || '')}`);
-      
+
       const lyrics = res.lyrics_synced || res.lyrics_unsynced || '';
       if (lyrics) {
         track.lyrics = lyrics;
@@ -1177,106 +1177,66 @@
     }
   }
 
-  // ================= EXPANDED LIBRARY BROWSER WITH ARTIST TREE =================
+  // ================= EXPANDED LIBRARY BROWSER (FLAT ALBUM GRID) =================
   function getLibraryContainer() {
-    return document.getElementById('library-list') || document.querySelector('.library-albums-container') || document.getElementById('artistTreeContainer');
+    return document.getElementById('library-list') || document.querySelector('.library-albums-container');
   }
 
-  // Ensure the toggle function targets the rendered grid ID
-  window.toggleArtistGroup = function(idx) {
-    const grid = document.getElementById(`albums-grid-${idx}`) || document.getElementById(`albums-group-${idx}`);
-    const chevron = document.getElementById(`chevron-${idx}`);
-    if (!grid) return;
-
-    const isHidden = grid.style.display === 'none' || getComputedStyle(grid).display === 'none';
-    if (isHidden) {
-      grid.style.display = 'grid';
-      if (chevron) chevron.textContent = '▼';
-    } else {
-      grid.style.display = 'none';
-      if (chevron) chevron.textContent = '▶';
-    }
-  };
-  window.toggleArtist = window.toggleArtistGroup;
-
   // Global loader to open album in studio editor
-  window.loadAlbumByPath = function(path) {
+  window.loadAlbumByPath = function (path) {
     if (!path) return;
     inspectPath(path);
   };
   window.loadAlbumIntoStudio = window.loadAlbumByPath;
 
-  // Single source of truth for rendering the library tree
+  // Stubs for backward compatibility
+  window.toggleArtistGroup = function () { };
+  window.toggleArtist = function () { };
+
+  // Render flat album grid (no artist grouping/collapsing)
   function renderLibraryList(albumsToRender) {
-    const container = document.getElementById('library-list') || document.querySelector('.library-albums-container') || document.getElementById('artistTreeContainer');
+    const container = document.getElementById('library-list') || document.querySelector('.library-albums-container');
     if (!container) return;
 
     if (!albumsToRender || albumsToRender.length === 0) {
-      container.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b;">No matching albums found.</div>';
+      container.innerHTML = '<div style="text-align:center; padding:40px; color:#64748b; font-size:14px;">No albums found.</div>';
       return;
     }
 
-    // 1. Group albums by artist
-    const groups = {};
-    albumsToRender.forEach(alb => {
-      const artist = alb.artist || alb.album_artist || "Unknown Artist";
-      const path = alb.path || alb.folder || '';
-      const title = alb.title || alb.name || alb.album || 'Untitled';
-      const cover = alb.cover_url || (path ? getApiUrl('/api/cover?path=' + encodeURIComponent(path)) : '/static/img/cover-placeholder.png');
-      const normalizedAlb = {
-        ...alb,
-        path: path,
-        folder: path,
-        title: title,
-        name: title,
-        album: title,
-        artist: artist,
-        cover_url: cover,
-        track_count: alb.track_count || 0,
-        year: alb.year || '',
-      };
-      if (!groups[artist]) groups[artist] = [];
-      groups[artist].push(normalizedAlb);
-    });
+    // Sort alphabetically by album title (or artist, if preferred)
+    const sorted = [...albumsToRender].sort((a, b) =>
+      (a.title || a.name || '').localeCompare(b.title || b.name || '')
+    );
 
-    const sortedArtists = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+    container.innerHTML = `
+      <div class="library-flat-grid">
+        ${sorted.map(album => {
+      const coverSrc = album.cover_url || `/api/cover?path=${encodeURIComponent(album.path || '')}`;
+      const title = escapeHtml(album.title || album.name || 'Untitled');
+      const artist = escapeHtml(album.artist || album.album_artist || 'Unknown Artist');
+      const safePath = escapeHtml(album.path || album.folder || '');
 
-    // 2. Render both the header AND the cards grid for every artist
-    container.innerHTML = sortedArtists.map((artist, idx) => {
-      const artistAlbums = groups[artist];
       return `
-        <div class="artist-group" data-artist="${escapeHtml(artist)}">
-          <div class="artist-header" onclick="toggleArtistGroup(${idx})">
-            <div class="artist-header-info">
-              <span class="chevron" id="chevron-${idx}">▶</span>
-              <span class="artist-title">${escapeHtml(artist)}</span>
-            </div>
-            <span class="album-badge">${artistAlbums.length} ${artistAlbums.length === 1 ? 'album' : 'albums'}</span>
-          </div>
-          <div class="artist-albums-grid" id="albums-grid-${idx}" style="display: none;">
-            ${artistAlbums.map(album => `
-              <div class="library-card" onclick="loadAlbumByPath('${escapeHtml(album.path || album.folder || '')}')">
-                <div class="card-cover-wrapper">
-                  <img src="${album.cover_url || getApiUrl('/api/cover?path=' + encodeURIComponent(album.path || ''))}" 
-                       alt="${escapeHtml(album.title || album.name || 'Album')}" 
-                       loading="lazy"
-                       onerror="this.src='/static/img/cover-placeholder.png'; this.onerror=null;" />
-                </div>
-                <div class="card-info">
-                  <div class="card-title" title="${escapeHtml(album.title || album.name || '')}">
-                    ${escapeHtml(album.title || album.name || 'Untitled')}
-                  </div>
-                  <div class="card-subtitle">
-                    ${album.year ? `<span>${album.year}</span> • ` : ''}
-                    <span>${album.track_count ? album.track_count + ' tracks' : ''}</span>
-                  </div>
+            <div class="library-card" onclick="loadAlbumByPath('${safePath}')" title="${title} - ${artist}">
+              <div class="card-cover-wrapper">
+                <img src="${coverSrc}" 
+                     alt="${title}" 
+                     loading="lazy" 
+                     onerror="this.src='/static/img/cover-placeholder.png'; this.onerror=null;" />
+              </div>
+              <div class="card-info">
+                <div class="card-title">${title}</div>
+                <div class="card-artist">${artist}</div>
+                <div class="card-subtitle">
+                  ${album.year ? `<span>${album.year}</span> • ` : ''}
+                  <span>${album.track_count ? album.track_count + ' tracks' : ''}</span>
                 </div>
               </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-    }).join('');
+            </div>
+          `;
+    }).join('')}
+      </div>
+    `;
   }
 
   const renderArtistTree = renderLibraryList;
@@ -1324,19 +1284,15 @@
     const searchInput = document.getElementById('library-search-input') || document.getElementById('libViewFilterInput') || document.querySelector('.library-search input') || document.querySelector('.library-search-input');
     const q = (e && e.target ? e.target.value : (searchInput ? searchInput.value : '')).trim().toLowerCase();
     if (!q) {
-      renderLibraryList(state.libraryAlbums);
+      renderLibraryList(state.libraryAlbums || []);
       return;
     }
-    const filtered = state.libraryAlbums.filter(alb => {
-      const title = (alb.title || alb.name || alb.album || '').toLowerCase();
+    const filtered = (state.libraryAlbums || []).filter(alb => {
+      const title = (alb.title || alb.name || '').toLowerCase();
       const artist = (alb.artist || alb.album_artist || '').toLowerCase();
       return title.includes(q) || artist.includes(q);
     });
     renderLibraryList(filtered);
-
-    // Auto-expand groups when actively filtering
-    document.querySelectorAll('.artist-albums-grid').forEach(grid => grid.style.display = 'grid');
-    document.querySelectorAll('.chevron').forEach(ch => ch.textContent = '▼');
   }
 
   // ================= VIEW 2: DOWNLOADER & TASK POLLING =================
@@ -1777,10 +1733,22 @@
       });
     });
 
-    // Library view filter
-    const libSearchInput = document.getElementById('libViewFilterInput') || document.getElementById('library-search-input') || document.querySelector('.library-search-input');
+    // Wire the search input for real-time filtering
+    const libSearchInput = document.getElementById('library-search-input') || document.querySelector('.library-search input');
     if (libSearchInput) {
-      libSearchInput.addEventListener('input', filterLibraryTree);
+      libSearchInput.addEventListener('input', (e) => {
+        const q = e.target.value.trim().toLowerCase();
+        if (!q) {
+          renderLibraryList(state.libraryAlbums || []);
+          return;
+        }
+        const filtered = (state.libraryAlbums || []).filter(alb => {
+          const title = (alb.title || alb.name || '').toLowerCase();
+          const artist = (alb.artist || alb.album_artist || '').toLowerCase();
+          return title.includes(q) || artist.includes(q);
+        });
+        renderLibraryList(filtered);
+      });
     }
 
     // Modals

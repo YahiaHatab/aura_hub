@@ -1543,6 +1543,23 @@ button.artist-tree-header:hover,
   width: 100% !important;
 }
 
+/* Flat Album Grid in Library View */
+.library-flat-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+  gap: 16px !important;
+  padding: 4px 2px 32px 2px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+@media (max-width: 768px) {
+  .library-flat-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+    gap: 12px !important;
+  }
+}
+
 /* Album Card in Library (>=160px) */
 .library-card,
 .library-album-card {
@@ -1552,7 +1569,7 @@ button.artist-tree-header:hover,
   padding: 10px !important;
   display: flex !important;
   flex-direction: column !important;
-  gap: 10px !important;
+  gap: 8px !important;
   cursor: pointer !important;
   transition: all 0.2s ease !important;
   position: relative !important;
@@ -1605,29 +1622,41 @@ button.artist-tree-header:hover,
 .album-card-meta {
   display: flex !important;
   flex-direction: column !important;
-  gap: 4px !important;
+  gap: 3px !important;
+  min-width: 0 !important;
 }
 
 .card-title,
 .album-card-title {
-  font-size: 15px !important;
+  font-size: 14px !important;
   font-weight: 700 !important;
   color: var(--text-main, #f8fafc) !important;
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
-  line-height: 1.25 !important;
+  line-height: 1.3 !important;
 }
 
-.card-subtitle,
-.album-card-sub,
+.card-artist,
 .album-card-artist {
   font-size: 13px !important;
   color: var(--text-muted, #94a3b8) !important;
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
-  line-height: 1.25 !important;
+  line-height: 1.3 !important;
+}
+
+.card-subtitle,
+.album-card-sub {
+  font-size: 11px !important;
+  color: var(--text-dim, #64748b) !important;
+  font-family: var(--font-mono, monospace) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  line-height: 1.3 !important;
+  margin-top: 2px !important;
 }
 
 .album-card-counts {
