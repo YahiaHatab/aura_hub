@@ -179,6 +179,18 @@ async def get_current_user(
             detail="Missing Authorization header containing Telegram initData.",
         )
 
+    # Standalone Desktop Studio token bypass
+    configured_token = getattr(config, "ADMIN_TOKEN", None)
+    if configured_token and raw_token == configured_token:
+        return {
+            "id": getattr(config, "PRIMARY_ADMIN_ID", 1497076788),
+            "first_name": "Admin",
+            "username": "admin",
+            "is_admin": True,
+            "is_allowed": True,
+            "auth_type": "desktop_token",
+        }
+
     is_valid, user_data, err_msg = verify_telegram_init_data(
         raw_token, config.TELEGRAM_BOT_TOKEN
     )

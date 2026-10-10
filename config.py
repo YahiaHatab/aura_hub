@@ -28,6 +28,8 @@ TELEGRAM_BOT_TOKEN = os.environ.get(
     "TELEGRAM_BOT_TOKEN", "8931396589:AAEFjxpKr6AC5dEbcxt61QADWVXqlxVjpKI"
 )
 
+ADMIN_TOKEN: str = os.environ.get("ADMIN_TOKEN", "")
+
 # Parse allowed and admin user IDs as sets
 _raw_allowed = os.environ.get("ALLOWED_USER_IDS", "1497076788")
 ALLOWED_USER_IDS: set[int] = {
@@ -48,6 +50,9 @@ else:
 
 # Ensure all admins are also included in the allowed users set
 ALLOWED_USER_IDS.update(ADMIN_USER_IDS)
+
+# Primary admin ID for desktop/fallback contexts
+PRIMARY_ADMIN_ID: int = next(iter(ADMIN_USER_IDS)) if ADMIN_USER_IDS else 0
 
 GENIUS_ACCESS_TOKEN = os.environ.get(
     "GENIUS_ACCESS_TOKEN",
