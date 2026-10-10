@@ -14,6 +14,7 @@ Implements fuzzy string matching, duration proximity scoring, track count alignm
 and a metadata completeness recommendation engine.
 """
 
+from abc import ABC, abstractmethod
 import asyncio
 import base64
 import concurrent.futures
@@ -25,9 +26,9 @@ import os
 from pathlib import Path
 import shutil
 import time
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
 import urllib.parse
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import acoustid
 import httpx
@@ -145,16 +146,59 @@ class MetadataCandidate:
     album_data: Optional[UnifiedAlbumMetadata] = None
     track_data: Optional[UnifiedTrackMetadata] = None
     preview: Dict[str, Any] = field(default_factory=dict)
+    brand_color: str = ""
+    badge_label: str = ""
+
+    def __post_init__(self):
+        if not self.brand_color or not self.badge_label:
+            # Automatic fallback source branding
+            src_lower = (self.source or "").lower()
+            if src_lower == "spotify":
+                self.brand_color = self.brand_color or "#1DB954"
+                self.badge_label = self.badge_label or "Spotify"
+            elif src_lower == "deezer":
+                self.brand_color = self.brand_color or "#A238FF"
+                self.badge_label = self.badge_label or "Deezer"
+            elif src_lower in ("musicbrainz", "mb"):
+                self.brand_color = self.brand_color or "#EB743B"
+                self.badge_label = self.badge_label or "MusicBrainz"
+            elif src_lower == "discogs":
+                self.brand_color = self.brand_color or "#333333"
+                self.badge_label = self.badge_label or "Discogs"
+            elif src_lower == "genius":
+                self.brand_color = self.brand_color or "#FFFF64"
+                self.badge_label = self.badge_label or "Genius"
+            elif src_lower == "lrclib":
+                self.brand_color = self.brand_color or "#10B981"
+                self.badge_label = self.badge_label or "LRCLIB"
+            elif src_lower in ("itunes", "apple", "apple music"):
+                self.brand_color = self.brand_color or "#FA243C"
+                self.badge_label = self.badge_label or "Apple Music"
+            else:
+                self.brand_color = self.brand_color or "#38BDF8"
+                self.badge_label = self.badge_label or (self.source or "Local")
+
+        if self.preview is not None:
+            if "brand_color" not in self.preview:
+                self.preview["brand_color"] = self.brand_color
+            if "badge_label" not in self.preview:
+                self.preview["badge_label"] = self.badge_label
+            if "source" not in self.preview:
+                self.preview["source"] = self.source
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "source": self.source,
+            "source_name": self.source,
+            "brand_color": self.brand_color,
+            "badge_label": self.badge_label,
             "confidence_score": round(self.confidence_score, 1),
             "is_recommended": self.is_recommended,
             "preview": self.preview,
             "album_data": self.album_data.to_dict() if self.album_data else None,
             "track_data": self.track_data.to_dict() if self.track_data else None,
         }
+
 
 
 # =====================================================================
@@ -668,14 +712,63 @@ def search_genius_album(
 
 
 # =====================================================================
-# MULTI-PROVIDER AGGREGATORS (ASYNC)
+# MODULAR METADATA PROVIDER ARCHITECTURE (PLUGIN REGISTRY)
 # =====================================================================
 
-class MusicBrainzProvider:
-    """Provider wrapper for MusicBrainz REST API & Cover Art Archive."""
+class BaseMetadataProvider(ABC):
+    """Abstract base class for all metadata provider plugins."""
+    source_name: str = "Unknown"
+    brand_color: str = "#6366F1"
+    badge_label: str = "Provider"
 
-    @staticmethod
-    async def search_album(album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
+    @abstractmethod
+    async def search_album(self, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
+        """Asynchronously searches for album candidates."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def search_track(self, title: str, artist: str = "") -> List[UnifiedTrackMetadata]:
+        """Asynchronously searches for track candidates."""
+        raise NotImplementedError
+
+    async def get_album_tracks(self, release_id: str) -> List[Dict[str, Any]]:
+        """Optional hook to retrieve tracklist details for a specific release ID."""
+        return []
+
+
+class MetadataRegistry:
+    """Central registry for discovering, registering, and orchestrating metadata providers."""
+    _providers: Dict[str, BaseMetadataProvider] = {}
+
+    @classmethod
+    def register(cls, provider_cls: Type[BaseMetadataProvider]) -> Type[BaseMetadataProvider]:
+        """Decorator to register a metadata provider plugin."""
+        instance = provider_cls()
+        key = instance.source_name.strip().lower()
+        cls._providers[key] = instance
+        logger.debug(f"Registered metadata provider: {instance.source_name} ({instance.brand_color})")
+        return provider_cls
+
+    @classmethod
+    def get_providers(cls) -> List[BaseMetadataProvider]:
+        """Returns all registered metadata provider instances."""
+        return list(cls._providers.values())
+
+    @classmethod
+    def get_provider(cls, name: str) -> Optional[BaseMetadataProvider]:
+        """Retrieves a provider by source name (case-insensitive)."""
+        return cls._providers.get((name or "").strip().lower())
+
+
+@MetadataRegistry.register
+class MusicBrainzProvider(BaseMetadataProvider):
+    """Provider wrapper for MusicBrainz REST API & Cover Art Archive."""
+    source_name: str = "MusicBrainz"
+    brand_color: str = "#EB743B"
+    badge_label: str = "MusicBrainz"
+
+    @classmethod
+    async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
         await _throttle_musicbrainz()
         results: List[UnifiedAlbumMetadata] = []
         try:
@@ -753,11 +846,15 @@ class MusicBrainzProvider:
         return results
 
 
-class DeezerProvider:
+@MetadataRegistry.register
+class DeezerProvider(BaseMetadataProvider):
     """Provider wrapper for public Deezer REST API."""
+    source_name: str = "Deezer"
+    brand_color: str = "#A238FF"
+    badge_label: str = "Deezer"
 
-    @staticmethod
-    async def search_album(album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
+    @classmethod
+    async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
         results: List[UnifiedAlbumMetadata] = []
         query = f'artist:"{artist}" album:"{album}"' if artist else album
         url = f"https://api.deezer.com/search/album?q={urllib.parse.quote(query)}&limit=3"
@@ -889,11 +986,15 @@ class DeezerProvider:
         return results
 
 
-class ITunesProvider:
+@MetadataRegistry.register
+class ITunesProvider(BaseMetadataProvider):
     """Provider wrapper for public iTunes Search API."""
+    source_name: str = "iTunes"
+    brand_color: str = "#FA243C"
+    badge_label: str = "Apple Music"
 
-    @staticmethod
-    async def search_album(album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
+    @classmethod
+    async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
         results: List[UnifiedAlbumMetadata] = []
         term = f"{artist} {album}".strip()
         url = f"https://itunes.apple.com/search?term={urllib.parse.quote(term)}&entity=album&limit=3&lang=en_us"
@@ -1016,8 +1117,12 @@ class ITunesProvider:
         return results
 
 
-class SpotifyProvider:
+@MetadataRegistry.register
+class SpotifyProvider(BaseMetadataProvider):
     """Provider wrapper for Spotify Web API via client credentials flow."""
+    source_name: str = "Spotify"
+    brand_color: str = "#1DB954"
+    badge_label: str = "Spotify"
 
     _access_token: Optional[str] = None
     _token_expiry: float = 0.0
@@ -1172,11 +1277,15 @@ class SpotifyProvider:
         return results
 
 
-class DiscogsProvider:
+@MetadataRegistry.register
+class DiscogsProvider(BaseMetadataProvider):
     """Provider wrapper for Discogs API (deep credits for producers and composers)."""
+    source_name: str = "Discogs"
+    brand_color: str = "#333333"
+    badge_label: str = "Discogs"
 
-    @staticmethod
-    async def search_album(album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
+    @classmethod
+    async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
         token = getattr(config, "DISCOGS_API_TOKEN", "")
         if not token:
             return []
@@ -1278,6 +1387,140 @@ class DiscogsProvider:
         except Exception as e:
             logger.debug(f"Discogs lookup failed: {e}")
         return results
+
+    @classmethod
+    async def search_track(cls, title: str, artist: str = "") -> List[UnifiedTrackMetadata]:
+        token = getattr(config, "DISCOGS_API_TOKEN", "")
+        if not token:
+            return []
+        query = f"{artist} {title}".strip()
+        url = f"https://api.discogs.com/database/search?q={urllib.parse.quote(query)}&type=release&token={token}&per_page=2"
+        results: List[UnifiedTrackMetadata] = []
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(url, headers={"User-Agent": "AuraMusicHub/1.0"})
+                if resp.status_code == 200:
+                    items = resp.json().get("results", [])
+                    for it in items[:1]:
+                        cover = it.get("cover_image") or it.get("thumb") or ""
+                        results.append(
+                            UnifiedTrackMetadata(
+                                title=title,
+                                artist=it.get("title", "").split("-")[0].strip() or artist,
+                                cover_url=cover,
+                                year=str(it.get("year", ""))[:4] if it.get("year") else "",
+                                source="Discogs",
+                            )
+                        )
+        except Exception as e:
+            logger.debug(f"Discogs track search failed: {e}")
+        return results
+
+
+@MetadataRegistry.register
+class GeniusProvider(BaseMetadataProvider):
+    """Provider wrapper for Genius API lyrics and producer/composer credits."""
+    source_name: str = "Genius"
+    brand_color: str = "#FFFF64"
+    badge_label: str = "Genius"
+
+    @classmethod
+    async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
+        loop = asyncio.get_running_loop()
+        try:
+            g_album = await loop.run_in_executor(None, search_genius_album, album, artist)
+            if not g_album:
+                return []
+            tracks: List[UnifiedTrackMetadata] = []
+            album_tracks = getattr(g_album, "tracks", []) or []
+            for t in album_tracks:
+                song = getattr(t, "song", None) or t
+                s_title = getattr(song, "title", "") or ""
+                if s_title:
+                    tracks.append(
+                        UnifiedTrackMetadata(
+                            title=s_title,
+                            artist=getattr(song, "artist", artist) or artist,
+                            album=getattr(g_album, "name", album) or album,
+                            source="Genius",
+                        )
+                    )
+            return [
+                UnifiedAlbumMetadata(
+                    album=getattr(g_album, "name", album) or album,
+                    artist=getattr(g_album, "artist", artist) or artist,
+                    cover_url=getattr(g_album, "cover_art_url", "") or "",
+                    tracks=tracks,
+                    source="Genius",
+                )
+            ]
+        except Exception as e:
+            logger.debug(f"Genius search_album failed: {e}")
+            return []
+
+    @classmethod
+    async def search_track(cls, title: str, artist: str = "") -> List[UnifiedTrackMetadata]:
+        client = get_genius_client()
+        if not client:
+            return []
+        loop = asyncio.get_running_loop()
+        try:
+            song = await loop.run_in_executor(
+                None, lambda: client.search_song(title, artist if artist else None)
+            )
+            if song and getattr(song, "title", None):
+                producers = [
+                    p.name for p in getattr(song, "producer_artists", []) if getattr(p, "name", None)
+                ]
+                composers = [
+                    w.name for w in getattr(song, "writer_artists", []) if getattr(w, "name", None)
+                ]
+                lyrics = getattr(song, "lyrics", "") or ""
+                return [
+                    UnifiedTrackMetadata(
+                        title=song.title,
+                        artist=song.artist or artist,
+                        album=getattr(song, "album", "") or "",
+                        year=str(getattr(song, "year", ""))[:4] if getattr(song, "year", None) else "",
+                        producers=producers,
+                        composers=composers,
+                        lyrics_unsynced=lyrics,
+                        cover_url=getattr(song, "song_art_image_url", "") or "",
+                        source="Genius",
+                    )
+                ]
+        except Exception as e:
+            logger.debug(f"Genius search_track failed: {e}")
+        return []
+
+
+@MetadataRegistry.register
+class LrclibProvider(BaseMetadataProvider):
+    """Provider wrapper for LRCLIB synchronized and plain lyrics."""
+    source_name: str = "LRCLIB"
+    brand_color: str = "#10B981"
+    badge_label: str = "LRCLIB"
+
+    @classmethod
+    async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
+        return []
+
+    @classmethod
+    async def search_track(cls, title: str, artist: str = "") -> List[UnifiedTrackMetadata]:
+        res = await fetch_lrclib_lyrics_async(title, artist)
+        synced = res.get("synced", "")
+        plain = res.get("plain", "")
+        if synced or plain:
+            return [
+                UnifiedTrackMetadata(
+                    title=title,
+                    artist=artist,
+                    lyrics_synced=synced,
+                    lyrics_unsynced=plain,
+                    source="LRCLIB",
+                )
+            ]
+        return []
 
 
 # =====================================================================
@@ -1444,15 +1687,18 @@ async def search_album_metadata_candidates_async(
     local_track_count: Optional[int] = None,
     local_durations: Optional[List[float]] = None,
 ) -> List[MetadataCandidate]:
-    """Asynchronously queries all configured metadata providers and aggregates ranked album candidates."""
-    tasks = [
-        MusicBrainzProvider.search_album(album_name, artist_name),
-        DeezerProvider.search_album(album_name, artist_name),
-        ITunesProvider.search_album(album_name, artist_name),
-        SpotifyProvider.search_album(album_name, artist_name),
-        DiscogsProvider.search_album(album_name, artist_name),
-    ]
+    """Asynchronously queries all registered metadata providers and aggregates ranked album candidates."""
+    providers = MetadataRegistry.get_providers()
+    timeout = float(getattr(config, "METADATA_HTTP_TIMEOUT", 10.0))
 
+    async def _safe_search_album(p: BaseMetadataProvider) -> List[UnifiedAlbumMetadata]:
+        try:
+            return await asyncio.wait_for(p.search_album(album_name, artist_name), timeout=timeout)
+        except Exception as e:
+            logger.debug(f"Provider {p.source_name} search_album failed: {e}")
+            return []
+
+    tasks = [_safe_search_album(p) for p in providers]
     results_lists = await asyncio.gather(*tasks, return_exceptions=True)
     raw_albums: List[UnifiedAlbumMetadata] = []
 
@@ -1538,14 +1784,18 @@ async def search_track_metadata_candidates_async(
     artist: str = "",
     local_duration: Optional[float] = None,
 ) -> List[MetadataCandidate]:
-    """Asynchronously queries metadata providers for single track candidates."""
-    tasks = [
-        MusicBrainzProvider.search_track(title, artist),
-        DeezerProvider.search_track(title, artist),
-        ITunesProvider.search_track(title, artist),
-        SpotifyProvider.search_track(title, artist),
-    ]
+    """Asynchronously queries registered metadata providers for single track candidates."""
+    providers = MetadataRegistry.get_providers()
+    timeout = float(getattr(config, "METADATA_HTTP_TIMEOUT", 10.0))
 
+    async def _safe_search_track(p: BaseMetadataProvider) -> List[UnifiedTrackMetadata]:
+        try:
+            return await asyncio.wait_for(p.search_track(title, artist), timeout=timeout)
+        except Exception as e:
+            logger.debug(f"Provider {p.source_name} search_track failed: {e}")
+            return []
+
+    tasks = [_safe_search_track(p) for p in providers]
     results_lists = await asyncio.gather(*tasks, return_exceptions=True)
     raw_tracks: List[UnifiedTrackMetadata] = []
 

@@ -529,6 +529,18 @@ async def serve_studio():
     )
 
 
+@app.get("/favicon.ico", response_class=FileResponse)
+@app.get("/favicon.svg", response_class=FileResponse)
+@app.get("/hub/favicon.ico", response_class=FileResponse)
+@app.get("/hub/favicon.svg", response_class=FileResponse)
+async def serve_favicon():
+    """Serves the stylized vinyl disk / waveform favicon."""
+    fav_file = STATIC_DIR / "favicon.svg"
+    if fav_file.is_file():
+        return FileResponse(fav_file, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Favicon not found")
+
+
 # Mount static directory for JS/CSS assets under both root and /hub prefixes
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

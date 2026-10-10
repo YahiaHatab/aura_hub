@@ -1,7 +1,8 @@
 /**
- * Aura Hub — Desktop Metadata Studio
- * State management, spreadsheet grid keyboard navigation, side-by-side diffing,
- * artwork management, and synced lyrics timestamp shifting.
+ * Aura Hub — Desktop Metadata Studio & Command Center
+ * State management, spreadsheet grid with Excel-style multi-cell selection & paste,
+ * granular per-column broadcast, collapsible artist library tree, branded diff inspector,
+ * and unified audio ingestion pipeline.
  */
 
 (function () {
@@ -9,6 +10,7 @@
 
   // ================= STATE =================
   const state = {
+    currentView: 'studio', // 'studio' | 'downloader' | 'library'
     currentPath: '',
     isFolder: true,
     albumMeta: {
@@ -25,6 +27,8 @@
     originalTracks: [],
     selectedTrackIdx: 0,
     activeCell: { row: 0, col: 1 }, // row index, col index
+    selectedCells: new Set(), // Set of 'r:c' strings
+    selectionAnchor: { row: 0, col: 1 },
     isEditing: false,
     candidates: [],
     selectedCandidateIdx: -1,
@@ -37,9 +41,13 @@
       height: 0,
     },
     libraryAlbums: [],
+    downloadTasks: [],
+    taskPollTimer: null,
+    musicRequests: [],
+    selectedQuality: 'auto',
   };
 
-  // Editable column mappings: table column index -> field key
+  // Column definitions: col index -> field key
   const COLUMNS = [
     { key: 'track_number', title: '#', editable: true, type: 'number' },
     { key: 'title', title: 'Title', editable: true, type: 'text' },
@@ -52,6 +60,19 @@
     { key: 'duration_seconds', title: 'Time', editable: false, type: 'duration' },
     { key: 'lrc', title: 'LRC', editable: false, type: 'badge' },
   ];
+
+  // Source branding styles
+  const SOURCE_BRANDS = {
+    spotify: { color: '#1DB954', label: 'Spotify', icon: '🟢', cls: 'brand-spotify' },
+    deezer: { color: '#A238FF', label: 'Deezer', icon: '🟣', cls: 'brand-deezer' },
+    musicbrainz: { color: '#EB743B', label: 'MusicBrainz', icon: '🟠', cls: 'brand-musicbrainz' },
+    discogs: { color: '#475569', label: 'Discogs', icon: '💿', cls: 'brand-discogs' },
+    genius: { color: '#FFFF64', label: 'Genius', icon: '🟡', cls: 'brand-genius' },
+    itunes: { color: '#FA243C', label: 'Apple Music', icon: '🔴', cls: 'brand-apple' },
+    apple: { color: '#FA243C', label: 'Apple Music', icon: '🔴', cls: 'brand-apple' },
+    lrclib: { color: '#10B981', label: 'LRCLIB', icon: '🎤', cls: 'brand-lrclib' },
+    local: { color: '#38BDF8', label: 'Disk Tags', icon: '📁', cls: 'brand-local' },
+  };
 
   // ================= API & AUTH HELPERS =================
   function getApiUrl(endpoint) {
@@ -66,17 +87,13 @@
   }
 
   function getAuthToken() {
-    // 1. URL search params
     const params = new URLSearchParams(window.location.search);
     if (params.get('token')) return params.get('token');
     if (params.get('auth_token')) return params.get('auth_token');
 
-    // 2. Telegram WebApp initData if running in Telegram
     if (window.Telegram?.WebApp?.initData) {
       return window.Telegram.WebApp.initData;
     }
-
-    // 3. Local storage token
     return localStorage.getItem('aura_auth_token') || '';
   }
 
@@ -101,7 +118,7 @@
 
     const res = await fetch(url, options);
     if (res.status === 401 || res.status === 403) {
-      showToast('Authentication required. Click the key icon to provide your token.', 'error');
+      showToast('Authentication required. Click the key icon to set your ADMIN_TOKEN.', 'error');
       openAuthModal();
       throw new Error(`Auth failed (${res.status})`);
     }
@@ -114,7 +131,7 @@
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.detail || data.message || `Request failed with status ${res.status}`);
+      throw new Error(data.detail || data.message || `Request failed (${res.status})`);
     }
     return data;
   }
@@ -151,7 +168,41 @@
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   }
 
-  // ================= DATA LOADING =================
+  function getBrandInfo(sourceStr) {
+    const key = (sourceStr || '').toLowerCase().replace(/[^a-z]/g, '');
+    for (const k of Object.keys(SOURCE_BRANDS)) {
+      if (key.includes(k)) return SOURCE_BRANDS[k];
+    }
+    return SOURCE_BRANDS.local;
+  }
+
+  // ================= VIEW SWITCHER =================
+  function switchView(viewName) {
+    state.currentView = viewName;
+    document.querySelectorAll('.nav-view-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === viewName);
+    });
+
+    document.querySelectorAll('.app-view').forEach(viewEl => {
+      viewEl.classList.remove('active');
+    });
+
+    if (viewName === 'studio') {
+      document.getElementById('viewStudio').classList.add('active');
+      stopTaskPolling();
+    } else if (viewName === 'downloader') {
+      document.getElementById('viewDownloader').classList.add('active');
+      fetchDownloaderTasks();
+      fetchMusicRequests();
+      startTaskPolling();
+    } else if (viewName === 'library') {
+      document.getElementById('viewLibrary').classList.add('active');
+      loadLibraryTree();
+      stopTaskPolling();
+    }
+  }
+
+  // ================= DATA LOADING & INSPECTION =================
   async function inspectPath(path) {
     if (!path) return;
     try {
@@ -194,6 +245,9 @@
       // Reset selection & cell
       state.selectedTrackIdx = 0;
       state.activeCell = { row: 0, col: 1 };
+      state.selectionAnchor = { row: 0, col: 1 };
+      state.selectedCells.clear();
+      state.selectedCells.add('0:1');
       state.isEditing = false;
 
       // Cover art setup
@@ -218,6 +272,9 @@
       updateLyricsEditorView();
       renderCandidatesBar();
 
+      // Ensure studio view is visible
+      switchView('studio');
+
       // Update URL query path without reload
       const newUrl = new URL(window.location);
       newUrl.searchParams.set('path', state.currentPath);
@@ -237,7 +294,7 @@
 
   function updateNavbarHeader() {
     const badge = document.getElementById('navAlbumName');
-    const folderName = state.albumMeta.album || state.currentPath.split('/').pop() || 'Untitled';
+    const folderName = state.albumMeta.album || state.currentPath.split('/').pop() || 'No Folder Loaded';
     badge.textContent = folderName;
     badge.title = state.currentPath;
 
@@ -257,7 +314,6 @@
       previewImg.style.display = 'block';
       placeholder.style.display = 'none';
 
-      // Load dimensions
       const img = new Image();
       img.onload = function () {
         state.cover.width = img.naturalWidth;
@@ -347,13 +403,42 @@
     showToast('Applied album fields to all track rows', 'success');
   }
 
-  // ================= SPREADSHEET GRID & EDITING =================
+  // ================= GRANULAR PER-COLUMN HEADER BROADCAST =================
+  function broadcastColumnValue(colIdx) {
+    if (!state.tracks.length) {
+      showToast('No tracks loaded to broadcast', 'error');
+      return;
+    }
+    const colDef = COLUMNS[colIdx];
+    if (!colDef || !colDef.editable) return;
+
+    const row0 = state.tracks[0];
+    const sourceVal = row0[colDef.key];
+
+    // Deep clone value if list or string
+    let broadcastVal = Array.isArray(sourceVal) ? [...sourceVal] : sourceVal;
+
+    // Apply to Row 1 through Row N-1 for THIS column only
+    for (let r = 1; r < state.tracks.length; r++) {
+      if (Array.isArray(broadcastVal)) {
+        state.tracks[r][colDef.key] = [...broadcastVal];
+      } else {
+        state.tracks[r][colDef.key] = broadcastVal;
+      }
+    }
+
+    renderSpreadsheetGrid();
+    const displayVal = Array.isArray(broadcastVal) ? broadcastVal.join(', ') : broadcastVal;
+    showToast(`Broadcasted ${colDef.title} ("${displayVal || '[Empty]'}") to all ${state.tracks.length} tracks`, 'success');
+  }
+
+  // ================= SPREADSHEET GRID & EXCEL SELECTION =================
   function renderSpreadsheetGrid() {
     const tbody = document.getElementById('gridTbody');
     tbody.innerHTML = '';
 
     if (!state.tracks.length) {
-      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:30px; color:var(--text-dim);">No tracks loaded. Click 'Browse Library' to pick an album.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:30px; color:var(--text-dim);">No tracks loaded. Click 'Library' in top navigation to pick an album.</td></tr>`;
       return;
     }
 
@@ -369,18 +454,25 @@
         td.dataset.row = rIdx;
         td.dataset.col = cIdx;
 
-        // Check active cell
+        const cellKey = `${rIdx}:${cIdx}`;
+
+        // Active single cell focus
         if (state.activeCell.row === rIdx && state.activeCell.col === cIdx) {
           td.classList.add('cell-active');
         }
 
-        // Check if modified compared to original
+        // Multi-cell bounding box selection
+        if (state.selectedCells.has(cellKey)) {
+          td.classList.add('cell-selected');
+        }
+
+        // Modified / Dirty cell indicator
         const origTrack = state.originalTracks[rIdx];
         if (origTrack && col.editable) {
           const currentVal = formatFieldValue(track[col.key], col.type);
           const origVal = formatFieldValue(origTrack[col.key], col.type);
           if (currentVal !== origVal) {
-            td.classList.add('cell-modified');
+            td.classList.add('cell-modified', 'dirty');
           }
         }
 
@@ -388,7 +480,7 @@
           td.classList.add('editable');
         }
 
-        // Render cell content
+        // Content rendering
         if (col.key === 'track_number') {
           td.classList.add('col-num');
           td.textContent = track.track_number !== undefined ? track.track_number : rIdx + 1;
@@ -437,12 +529,10 @@
     if (rIdx < 0 || rIdx >= state.tracks.length) return;
     state.selectedTrackIdx = rIdx;
 
-    // Update row highlighting
     document.querySelectorAll('.studio-grid tbody tr').forEach((tr, idx) => {
       tr.classList.toggle('selected', idx === rIdx);
     });
 
-    // Update lyrics editor for newly selected track
     updateLyricsEditorView();
   }
 
@@ -457,10 +547,8 @@
     state.activeCell.row = Math.max(0, Math.min(row, maxRow));
     state.activeCell.col = Math.max(0, Math.min(col, maxCol));
 
-    // Also select that track row
     selectTrackRow(state.activeCell.row);
 
-    // Re-render highlight
     document.querySelectorAll('.studio-grid td.cell-active').forEach(td => td.classList.remove('cell-active'));
     const targetTd = document.querySelector(`.studio-grid td[data-row="${state.activeCell.row}"][data-col="${state.activeCell.col}"]`);
     if (targetTd) {
@@ -472,6 +560,29 @@
     if (startEditing) {
       startCellEdit();
     }
+  }
+
+  // Update rectangular range selection
+  function updateRangeSelection(anchor, target) {
+    state.selectedCells.clear();
+    const minR = Math.min(anchor.row, target.row);
+    const maxR = Math.max(anchor.row, target.row);
+    const minC = Math.min(anchor.col, target.col);
+    const maxC = Math.max(anchor.col, target.col);
+
+    for (let r = minR; r <= maxR; r++) {
+      for (let c = minC; c <= maxC; c++) {
+        state.selectedCells.add(`${r}:${c}`);
+      }
+    }
+
+    // Update visuals
+    document.querySelectorAll('.studio-grid td.cell-selected').forEach(td => td.classList.remove('cell-selected'));
+    state.selectedCells.forEach(key => {
+      const [r, c] = key.split(':');
+      const td = document.querySelector(`.studio-grid td[data-row="${r}"][data-col="${c}"]`);
+      if (td) td.classList.add('cell-selected');
+    });
   }
 
   function startCellEdit() {
@@ -498,7 +609,6 @@
       if (e.key === 'Enter') {
         e.preventDefault();
         commitCellEdit();
-        // Move to next row in same col
         setActiveCell(state.activeCell.row + 1, state.activeCell.col, false);
       } else if (e.key === 'Tab') {
         e.preventDefault();
@@ -583,6 +693,86 @@
     }
   }
 
+  function clearSelectedCells() {
+    if (!state.selectedCells.size) return;
+    let clearedCount = 0;
+
+    state.selectedCells.forEach(key => {
+      const [rStr, cStr] = key.split(':');
+      const r = parseInt(rStr, 10);
+      const c = parseInt(cStr, 10);
+      const colDef = COLUMNS[c];
+      if (colDef && colDef.editable && state.tracks[r]) {
+        if (colDef.type === 'number') state.tracks[r][colDef.key] = 1;
+        else if (colDef.type === 'list') state.tracks[r][colDef.key] = [];
+        else state.tracks[r][colDef.key] = '';
+        clearedCount++;
+      }
+    });
+
+    renderSpreadsheetGrid();
+    showToast(`Cleared ${clearedCount} cell(s)`, 'info');
+  }
+
+  function handleClipboardPaste(e) {
+    if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+      return; // Regular text input handles paste naturally
+    }
+
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    if (!text) return;
+    e.preventDefault();
+
+    const lines = text.split(/\r?\n/).filter((line, idx, arr) => {
+      return !(idx === arr.length - 1 && line.trim() === '');
+    });
+    if (!lines.length) return;
+
+    // Find top-left starting cell
+    let startR = state.activeCell.row;
+    let startC = state.activeCell.col;
+
+    if (state.selectedCells.size > 0) {
+      let minR = Infinity;
+      let minC = Infinity;
+      state.selectedCells.forEach(key => {
+        const [r, c] = key.split(':').map(Number);
+        if (r < minR) minR = r;
+        if (c < minC) minC = c;
+      });
+      if (minR !== Infinity && minC !== Infinity) {
+        startR = minR;
+        startC = minC;
+      }
+    }
+
+    let modifiedCount = 0;
+    lines.forEach((line, dr) => {
+      const rowVals = line.split('\t');
+      rowVals.forEach((val, dc) => {
+        const targetR = startR + dr;
+        const targetC = startC + dc;
+        if (targetR < state.tracks.length && targetC < COLUMNS.length) {
+          const colDef = COLUMNS[targetC];
+          if (colDef.editable) {
+            const raw = val.trim();
+            if (colDef.type === 'number') {
+              state.tracks[targetR][colDef.key] = parseInt(raw, 10) || 1;
+            } else if (colDef.type === 'list') {
+              state.tracks[targetR][colDef.key] = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            } else {
+              state.tracks[targetR][colDef.key] = raw;
+            }
+            modifiedCount++;
+          }
+        }
+      });
+    });
+
+    renderSpreadsheetGrid();
+    showToast(`Pasted ${modifiedCount} cell(s) from clipboard`, 'success');
+  }
+
   function autoNumberTracks() {
     state.tracks.forEach((t, idx) => {
       t.track_number = idx + 1;
@@ -602,12 +792,12 @@
     showToast('Discarded all unsaved edits', 'info');
   }
 
-  // ================= EXTERNAL METADATA & DIFF INSPECTOR =================
+  // ================= EXTERNAL METADATA & BRANDED DIFF =================
   async function searchExternal(query, artist = '') {
     const cleanQ = query.trim();
     if (!cleanQ) return;
     try {
-      document.getElementById('diffStatusNote').textContent = `Querying MusicBrainz, Deezer, iTunes, Spotify, LRCLIB for "${cleanQ}"...`;
+      document.getElementById('diffStatusNote').textContent = `Querying MusicBrainz, Deezer, Spotify, iTunes, Discogs, Genius, LRCLIB for "${cleanQ}"...`;
       const res = await apiRequest(`/api/studio/search-external?query=${encodeURIComponent(cleanQ)}&type=album&artist=${encodeURIComponent(artist.trim())}`);
       
       state.candidates = res.candidates || [];
@@ -645,16 +835,19 @@
       const conf = Math.round(cand.confidence_score || 0);
       const isRec = cand.is_recommended;
       const prev = cand.preview || {};
+      const brand = getBrandInfo(cand.source || cand.source_name);
+
+      card.style.borderColor = idx === state.selectedCandidateIdx ? brand.color : '';
 
       card.innerHTML = `
         ${isRec ? '<span class="candidate-rec-tag">Recommended</span>' : ''}
         <div class="candidate-header">
-          <span class="candidate-source-badge">${escapeHtml(cand.source || 'Provider')}</span>
+          <span class="source-pill-badge ${brand.cls}">${brand.icon} ${escapeHtml(cand.source || brand.label)}</span>
           <span class="candidate-conf-badge">${conf}% Match</span>
         </div>
         <div class="candidate-title">${escapeHtml(prev.album || prev.title || 'Untitled')}</div>
         <div class="candidate-artist">${escapeHtml(prev.artist || 'Unknown')}</div>
-        <div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between;">
+        <div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; margin-top:2px;">
           <span>${prev.track_count ? prev.track_count + ' tracks' : ''}</span>
           <span>${prev.year || ''}</span>
         </div>
@@ -673,7 +866,7 @@
     const artUrls = [];
     state.candidates.forEach(c => {
       const art = c.preview?.cover_url || c.album_data?.cover_url || c.track_data?.cover_url;
-      if (art && !artUrls.includes(art)) {
+      if (art && !artUrls.some(a => a.url === art)) {
         artUrls.push({ url: art, source: c.source });
       }
     });
@@ -683,9 +876,10 @@
       artUrls.slice(0, 6).forEach(item => {
         const thumb = document.createElement('div');
         thumb.className = 'provider-art-thumb';
+        const brand = getBrandInfo(item.source);
         thumb.innerHTML = `
-          <img src="${item.url}" alt="Cover">
-          <span class="src-badge">${item.source}</span>
+          <img src="${item.url}" alt="Cover" loading="lazy">
+          <span class="src-badge" style="background:${brand.color}; color:#fff;">${brand.label}</span>
         `;
         thumb.addEventListener('click', () => selectProviderArt(item.url));
         grid.appendChild(thumb);
@@ -712,9 +906,11 @@
     card.style.display = 'block';
     const albumData = cand.album_data || {};
     const prev = cand.preview || {};
+    const brand = getBrandInfo(cand.source || cand.source_name);
 
     titleEl.textContent = prev.album || prev.title || 'Candidate Diff';
-    srcEl.textContent = cand.source || 'Provider';
+    srcEl.textContent = `${brand.icon} ${cand.source || brand.label}`;
+    srcEl.className = `source-pill-badge ${brand.cls}`;
 
     tbody.innerHTML = '';
 
@@ -779,7 +975,6 @@
     if (albumData.producers) state.albumMeta.producers = [...albumData.producers];
     if (albumData.composers) state.albumMeta.composers = [...albumData.composers];
 
-    // If candidate has tracks list, align track titles by position
     if (Array.isArray(albumData.tracks) && albumData.tracks.length) {
       albumData.tracks.forEach((candTrk, idx) => {
         if (state.tracks[idx]) {
@@ -791,7 +986,6 @@
       });
     }
 
-    // Candidate artwork if available
     const candArt = prev.cover_url || albumData.cover_url;
     if (candArt) {
       selectProviderArt(candArt);
@@ -849,7 +1043,6 @@
     const lines = track.lyrics ? track.lyrics.split('\n').filter(Boolean).length : 0;
     document.getElementById('lyricsLineCount').textContent = `${lines} line(s)`;
 
-    // Update row badge in grid without re-rendering everything
     const tdLrc = document.querySelector(`.studio-grid td[data-row="${state.selectedTrackIdx}"][data-col="9"]`);
     if (tdLrc) {
       tdLrc.innerHTML = track.has_lrc
@@ -862,7 +1055,6 @@
     const track = state.tracks[state.selectedTrackIdx];
     if (!track || !track.lyrics) return;
 
-    // Regex for [mm:ss.xx] or [mm:ss.xxx]
     const timestampRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
     let shiftCount = 0;
 
@@ -967,7 +1159,6 @@
       const res = await apiRequest('/api/studio/commit', 'POST', payload);
       showToast(`Saved! ${res.message || 'Tags synchronized'}`, 'success');
 
-      // Update baseline snapshots
       state.originalAlbumMeta = JSON.parse(JSON.stringify(state.albumMeta));
       state.originalTracks = JSON.parse(JSON.stringify(state.tracks));
       state.cover.isModified = false;
@@ -986,73 +1177,311 @@
     }
   }
 
-  // ================= LIBRARY BROWSER MODAL =================
-  async function openLibraryModal() {
-    const modal = document.getElementById('modalLibrary');
-    const listEl = document.getElementById('libAlbumList');
-    modal.classList.add('active');
+  // ================= EXPANDED LIBRARY BROWSER WITH ARTIST TREE =================
+  async function loadLibraryTree() {
+    const container = document.getElementById('artistTreeContainer');
+    const summary = document.getElementById('libraryStatsSummary');
+    container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-dim);">Scanning Navidrome library...</div>`;
 
-    if (!state.libraryAlbums.length) {
-      listEl.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim);">Loading library albums...</div>`;
-      try {
-        const res = await apiRequest('/api/library');
-        state.libraryAlbums = res.albums || [];
-        renderLibraryList(state.libraryAlbums);
-      } catch (err) {
-        listEl.innerHTML = `<div style="text-align:center; padding:20px; color:var(--accent-rose);">Failed to load library: ${escapeHtml(err.message)}</div>`;
-      }
-    } else {
-      renderLibraryList(state.libraryAlbums);
+    try {
+      const res = await apiRequest('/api/library');
+      state.libraryAlbums = res.albums || [];
+
+      // Group by Artist into Map<Artist, Album[]>
+      const artistMap = new Map();
+      let totalTracks = 0;
+
+      state.libraryAlbums.forEach(alb => {
+        const art = alb.artist || 'Various Artists';
+        if (!artistMap.has(art)) {
+          artistMap.set(art, []);
+        }
+        artistMap.get(art).push(alb);
+        totalTracks += (alb.track_count || 0);
+      });
+
+      summary.textContent = `${state.libraryAlbums.length} albums across ${artistMap.size} artists (${totalTracks} tracks)`;
+      renderArtistTree(artistMap);
+    } catch (err) {
+      container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--accent-rose);">Failed to load library: ${escapeHtml(err.message)}</div>`;
     }
   }
 
-  function renderLibraryList(albums) {
-    const listEl = document.getElementById('libAlbumList');
-    listEl.innerHTML = '';
+  function renderArtistTree(artistMap, filterQuery = '') {
+    const container = document.getElementById('artistTreeContainer');
+    container.innerHTML = '';
 
-    if (!albums.length) {
-      listEl.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim);">No matching albums found.</div>`;
+    const cleanFilter = filterQuery.toLowerCase().trim();
+    const sortedArtists = Array.from(artistMap.keys()).sort((a, b) => a.localeCompare(b));
+
+    let matchedArtistsCount = 0;
+
+    sortedArtists.forEach(artist => {
+      const albums = artistMap.get(artist);
+      const filteredAlbums = cleanFilter
+        ? albums.filter(a => a.album.toLowerCase().includes(cleanFilter) || artist.toLowerCase().includes(cleanFilter))
+        : albums;
+
+      if (cleanFilter && !filteredAlbums.length) return;
+      matchedArtistsCount++;
+
+      const group = document.createElement('div');
+      group.className = 'artist-tree-group';
+
+      const totalTracksInGroup = filteredAlbums.reduce((sum, a) => sum + (a.track_count || 0), 0);
+
+      const header = document.createElement('div');
+      header.className = 'artist-tree-header';
+      header.innerHTML = `
+        <div class="artist-header-left">
+          <span class="artist-toggle-icon">▾</span>
+          <span class="artist-name-title">${escapeHtml(artist)}</span>
+        </div>
+        <span class="artist-album-count-badge">${filteredAlbums.length} album(s) • ${totalTracksInGroup} tracks</span>
+      `;
+
+      header.addEventListener('click', () => {
+        group.classList.toggle('collapsed');
+      });
+
+      const grid = document.createElement('div');
+      grid.className = 'artist-albums-grid';
+
+      filteredAlbums.forEach(alb => {
+        const card = document.createElement('div');
+        card.className = 'library-album-card';
+        
+        const coverUrl = getApiUrl(`/api/cover?path=${encodeURIComponent(alb.folder)}`);
+        card.innerHTML = `
+          <div class="album-card-cover-wrap">
+            <img class="album-card-cover" src="${coverUrl}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'><rect fill=\\'%231a1e2d\\' width=\\'24\\' height=\\'24\\'/></svg>'">
+          </div>
+          <div class="album-card-meta">
+            <div class="album-card-title" title="${escapeHtml(alb.album)}">${escapeHtml(alb.album)}</div>
+            <div class="album-card-artist" title="${escapeHtml(alb.artist)}">${escapeHtml(alb.artist)}</div>
+            <div class="album-card-counts">
+              <span>${alb.track_count || 0} tracks</span>
+              <span class="lrc-badge ${alb.lrc_count ? 'synced' : 'missing'}">${alb.lrc_count ? `${alb.lrc_count} LRC` : 'No LRC'}</span>
+            </div>
+          </div>
+        `;
+
+        card.addEventListener('click', (e) => {
+          e.stopPropagation();
+          inspectPath(alb.folder);
+        });
+
+        grid.appendChild(card);
+      });
+
+      group.appendChild(header);
+      group.appendChild(grid);
+      container.appendChild(group);
+    });
+
+    if (matchedArtistsCount === 0) {
+      container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-dim);">No artists or albums match "${escapeHtml(filterQuery)}".</div>`;
+    }
+  }
+
+  function filterLibraryTree() {
+    const query = document.getElementById('libViewFilterInput').value;
+    const artistMap = new Map();
+    state.libraryAlbums.forEach(alb => {
+      const art = alb.artist || 'Various Artists';
+      if (!artistMap.has(art)) artistMap.set(art, []);
+      artistMap.get(art).push(alb);
+    });
+    renderArtistTree(artistMap, query);
+  }
+
+  // ================= VIEW 2: DOWNLOADER & TASK POLLING =================
+  async function triggerDownload() {
+    const input = document.getElementById('downloaderUrlInput');
+    const url = input.value.trim();
+    if (!url) {
+      showToast('Please paste a streaming or YouTube URL', 'error');
       return;
     }
 
-    albums.forEach(alb => {
-      const item = document.createElement('div');
-      item.className = 'lib-album-item';
-      
-      const coverUrl = getApiUrl(`/api/cover?path=${encodeURIComponent(alb.folder)}`);
-      item.innerHTML = `
-        <img class="lib-thumb" src="${coverUrl}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'><rect fill=\\'%231a1e2d\\' width=\\'24\\' height=\\'24\\'/></svg>'">
-        <div class="lib-meta">
-          <div class="lib-meta-title">${escapeHtml(alb.album || alb.folder)}</div>
-          <div class="lib-meta-artist">${escapeHtml(alb.artist || 'Unknown Artist')}</div>
-          <div class="lib-meta-counts">${alb.track_count || 0} tracks • ${alb.lrc_count || 0} LRC</div>
+    try {
+      showToast('Starting background ingestion pipeline...', 'info');
+      const res = await apiRequest('/api/download', 'POST', { url });
+      input.value = '';
+      showToast('Download task registered!', 'success');
+      fetchDownloaderTasks();
+      startTaskPolling();
+    } catch (err) {
+      showToast(`Ingestion failed: ${err.message}`, 'error');
+    }
+  }
+
+  async function fetchDownloaderTasks() {
+    try {
+      const data = await apiRequest('/api/tasks');
+      state.downloadTasks = data.tasks || [];
+      renderDownloaderTasks(state.downloadTasks);
+
+      const activeTask = state.downloadTasks.find(t => t.status === 'active');
+      const stepper = document.getElementById('taskStepperCard');
+      if (activeTask) {
+        stepper.style.display = 'flex';
+        document.getElementById('taskMsg').textContent = activeTask.message || 'Processing audio stream...';
+        document.getElementById('taskStatusBadge').textContent = (activeTask.stage || 'DOWNLOADING').toUpperCase();
+        document.getElementById('taskProgressBar').style.width = `${activeTask.progress || 10}%`;
+
+        const st = (activeTask.stage || '').toLowerCase();
+        document.getElementById('step-download').className = 'step-item ' + (st.includes('download') ? 'active' : (activeTask.progress > 30 ? 'done' : ''));
+        document.getElementById('step-tag').className = 'step-item ' + (st.includes('tag') ? 'active' : (activeTask.progress > 60 ? 'done' : ''));
+        document.getElementById('step-lyrics').className = 'step-item ' + (st.includes('lyric') ? 'active' : (activeTask.progress > 80 ? 'done' : ''));
+        document.getElementById('step-scan').className = 'step-item ' + (st.includes('scan') ? 'active' : (activeTask.progress >= 95 ? 'done' : ''));
+      } else {
+        stepper.style.display = 'none';
+      }
+    } catch (err) {
+      console.debug('Task poll error:', err);
+    }
+  }
+
+  function renderDownloaderTasks(tasks) {
+    const listEl = document.getElementById('downloaderTasksList');
+    listEl.innerHTML = '';
+
+    if (!tasks.length) {
+      listEl.innerHTML = `<div style="color:var(--text-dim); padding:16px; font-size:13px; text-align:center;">No recent download tasks.</div>`;
+      return;
+    }
+
+    tasks.slice(0, 10).forEach(t => {
+      const card = document.createElement('div');
+      card.className = 'task-item-card';
+
+      let statusCls = 'status-downloading';
+      if (t.status === 'completed') statusCls = 'status-completed';
+      else if (t.status === 'failed') statusCls = 'status-failed';
+
+      const title = t.title || (t.url ? t.url.replace(/^https?:\/\/(www\.)?/, '') : `Task #${t.id}`);
+      const sub = t.artist ? `${t.artist} • ${t.message || t.stage || ''}` : (t.message || t.url || '');
+
+      const coverHtml = t.cover_url
+        ? `<img src="${getApiUrl(t.cover_url)}" class="task-thumb" alt="Cover">`
+        : `<div class="task-thumb">🎵</div>`;
+
+      card.innerHTML = `
+        ${coverHtml}
+        <div class="task-meta">
+          <div class="task-title-line" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+          <div class="task-subtext" title="${escapeHtml(sub)}">${escapeHtml(sub)}</div>
         </div>
+        <span class="status-badge ${statusCls}">${t.status || 'ACTIVE'}</span>
       `;
 
-      item.addEventListener('click', () => {
-        document.getElementById('modalLibrary').classList.remove('active');
-        inspectPath(alb.folder);
-      });
-
-      listEl.appendChild(item);
+      listEl.appendChild(card);
     });
   }
 
-  function filterLibraryList() {
-    const filter = document.getElementById('libFilterInput').value.toLowerCase().trim();
-    if (!filter) {
-      renderLibraryList(state.libraryAlbums);
-      return;
-    }
-    const filtered = state.libraryAlbums.filter(a =>
-      (a.album || '').toLowerCase().includes(filter) ||
-      (a.artist || '').toLowerCase().includes(filter) ||
-      (a.folder || '').toLowerCase().includes(filter)
-    );
-    renderLibraryList(filtered);
+  function startTaskPolling() {
+    if (state.taskPollTimer) return;
+    state.taskPollTimer = setInterval(() => {
+      if (state.currentView === 'downloader') {
+        fetchDownloaderTasks();
+      }
+    }, 2500);
   }
 
-  // ================= MODALS & UTILITIES =================
+  function stopTaskPolling() {
+    if (state.taskPollTimer) {
+      clearInterval(state.taskPollTimer);
+      state.taskPollTimer = null;
+    }
+  }
+
+  // Requests Queue handling
+  async function fetchMusicRequests() {
+    try {
+      const data = await apiRequest('/api/requests');
+      state.musicRequests = data.requests || [];
+      renderMusicRequests(state.musicRequests);
+    } catch (err) {
+      console.debug('Request fetch error:', err);
+    }
+  }
+
+  function renderMusicRequests(requests) {
+    const listEl = document.getElementById('downloaderRequestsList');
+    listEl.innerHTML = '';
+
+    if (!requests.length) {
+      listEl.innerHTML = `<div style="color:var(--text-dim); padding:16px; font-size:13px; text-align:center;">No pending requests in queue.</div>`;
+      return;
+    }
+
+    requests.forEach(req => {
+      const card = document.createElement('div');
+      card.className = 'request-item-card';
+
+      const isPending = req.status === 'pending';
+      const actionsHtml = isPending
+        ? `<div style="display:flex; gap:6px;">
+             <button class="btn btn-primary" style="font-size:11px; padding:3px 8px;" data-id="${req.id}" data-action="approve">✓ Ingest</button>
+             <button class="btn btn-secondary" style="font-size:11px; padding:3px 8px;" data-id="${req.id}" data-action="reject">✕</button>
+           </div>`
+        : `<span class="status-badge ${req.status === 'completed' ? 'status-completed' : 'status-failed'}">${req.status}</span>`;
+
+      card.innerHTML = `
+        <div class="task-meta">
+          <div class="task-title-line">${escapeHtml(req.query_or_url || 'Untitled Request')}</div>
+          <div class="task-subtext">Requested by ${escapeHtml(req.user_name || 'User')}</div>
+        </div>
+        ${actionsHtml}
+      `;
+
+      if (isPending) {
+        card.querySelectorAll('button').forEach(btn => {
+          btn.addEventListener('click', () => handleRequestAction(btn.dataset.id, btn.dataset.action));
+        });
+      }
+
+      listEl.appendChild(card);
+    });
+  }
+
+  async function submitNewRequest() {
+    const input = document.getElementById('requestQueryInput');
+    const val = input.value.trim();
+    if (!val) return;
+    try {
+      await apiRequest('/api/requests/submit', 'POST', { query_or_url: val });
+      input.value = '';
+      showToast('Music request queued successfully', 'success');
+      fetchMusicRequests();
+    } catch (err) {
+      showToast(`Request failed: ${err.message}`, 'error');
+    }
+  }
+
+  async function handleRequestAction(reqId, action) {
+    try {
+      await apiRequest('/api/requests/action', 'POST', { request_id: reqId, action });
+      showToast(`Request ${action}d!`, 'success');
+      fetchMusicRequests();
+      fetchDownloaderTasks();
+    } catch (err) {
+      showToast(`Action failed: ${err.message}`, 'error');
+    }
+  }
+
+  async function clearCompletedRequests() {
+    try {
+      await apiRequest('/api/requests/clear', 'POST', { status: 'completed_only' });
+      showToast('Cleared resolved requests from history', 'info');
+      fetchMusicRequests();
+    } catch (err) {
+      showToast(`Clear failed: ${err.message}`, 'error');
+    }
+  }
+
+  // ================= MODALS & AUTH =================
   function openAuthModal() {
     const modal = document.getElementById('modalAuth');
     document.getElementById('authInputToken').value = getAuthToken();
@@ -1072,14 +1501,13 @@
   }
 
   function toggleShortcutsModal() {
-    const modal = document.getElementById('modalShortcuts');
-    modal.classList.toggle('active');
+    document.getElementById('modalShortcuts').classList.toggle('active');
   }
 
-  // ================= KEYBOARD & EVENT LISTENERS =================
+  // ================= KEYBOARD NAVIGATION & EVENTS =================
   function initKeyboardNavigation() {
     window.addEventListener('keydown', (e) => {
-      // 1. Global shortcuts
+      // 1. Global Shortcuts
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         commitChanges();
@@ -1092,48 +1520,97 @@
         return;
       }
 
-      // 2. Modals dismiss on Escape
       if (e.key === 'Escape') {
         document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
       }
 
-      // 3. Grid navigation when not editing inline input
+      // 2. Spreadsheet Grid Selection & Arrows (only in studio view)
+      if (state.currentView !== 'studio') return;
+
       if (!state.isEditing && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+        // Clear cells on Delete / Backspace
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault();
+          clearSelectedCells();
+          return;
+        }
+
+        // Shift + Arrows for rectangular range expansion
+        if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+          e.preventDefault();
+          if (e.key === 'ArrowUp') state.activeCell.row = Math.max(0, state.activeCell.row - 1);
+          else if (e.key === 'ArrowDown') state.activeCell.row = Math.min(state.tracks.length - 1, state.activeCell.row + 1);
+          else if (e.key === 'ArrowLeft') state.activeCell.col = Math.max(0, state.activeCell.col - 1);
+          else if (e.key === 'ArrowRight') state.activeCell.col = Math.min(COLUMNS.length - 1, state.activeCell.col + 1);
+
+          updateRangeSelection(state.selectionAnchor, state.activeCell);
+          scrollActiveCellIntoView();
+          return;
+        }
+
+        // Standard Single-Cell Navigation
         if (e.key === 'ArrowUp') {
           e.preventDefault();
           setActiveCell(state.activeCell.row - 1, state.activeCell.col, false);
+          state.selectionAnchor = { ...state.activeCell };
+          state.selectedCells.clear();
+          state.selectedCells.add(`${state.activeCell.row}:${state.activeCell.col}`);
+          updateRangeSelection(state.selectionAnchor, state.activeCell);
         } else if (e.key === 'ArrowDown') {
           e.preventDefault();
           setActiveCell(state.activeCell.row + 1, state.activeCell.col, false);
+          state.selectionAnchor = { ...state.activeCell };
+          state.selectedCells.clear();
+          state.selectedCells.add(`${state.activeCell.row}:${state.activeCell.col}`);
+          updateRangeSelection(state.selectionAnchor, state.activeCell);
         } else if (e.key === 'ArrowLeft') {
           e.preventDefault();
           setActiveCell(state.activeCell.row, state.activeCell.col - 1, false);
+          state.selectionAnchor = { ...state.activeCell };
+          state.selectedCells.clear();
+          state.selectedCells.add(`${state.activeCell.row}:${state.activeCell.col}`);
+          updateRangeSelection(state.selectionAnchor, state.activeCell);
         } else if (e.key === 'ArrowRight') {
           e.preventDefault();
           setActiveCell(state.activeCell.row, state.activeCell.col + 1, false);
+          state.selectionAnchor = { ...state.activeCell };
+          state.selectedCells.clear();
+          state.selectedCells.add(`${state.activeCell.row}:${state.activeCell.col}`);
+          updateRangeSelection(state.selectionAnchor, state.activeCell);
         } else if (e.key === 'Enter') {
           e.preventDefault();
           startCellEdit();
         } else if (e.key === 'Tab') {
           e.preventDefault();
-          if (e.shiftKey) {
-            moveToPreviousEditableCell();
-          } else {
-            moveToNextEditableCell();
-          }
+          if (e.shiftKey) moveToPreviousEditableCell();
+          else moveToNextEditableCell();
         }
       }
     });
 
-    // Grid cell clicks
+    // Clipboard Paste Listener
+    window.addEventListener('paste', handleClipboardPaste);
+
+    // Grid Cell Clicks (Single & Shift-Click)
     const tbody = document.getElementById('gridTbody');
     tbody.addEventListener('click', (e) => {
       const td = e.target.closest('td');
       if (!td) return;
       const r = parseInt(td.dataset.row, 10);
       const c = parseInt(td.dataset.col, 10);
-      if (!isNaN(r) && !isNaN(c)) {
+      if (isNaN(r) || isNaN(c)) return;
+
+      if (e.shiftKey) {
+        // Expand bounding box selection
+        state.activeCell = { row: r, col: c };
+        updateRangeSelection(state.selectionAnchor, state.activeCell);
+      } else {
+        // Single selection
+        state.selectionAnchor = { row: r, col: c };
+        state.selectedCells.clear();
+        state.selectedCells.add(`${r}:${c}`);
         setActiveCell(r, c, false);
+        updateRangeSelection(state.selectionAnchor, state.activeCell);
       }
     });
 
@@ -1146,12 +1623,25 @@
         setActiveCell(r, c, true);
       }
     });
+
+    // Column Header Broadcast Buttons
+    document.querySelectorAll('.col-broadcast-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const colIdx = parseInt(btn.dataset.col, 10);
+        broadcastColumnValue(colIdx);
+      });
+    });
   }
 
   function initUiEvents() {
-    // Top nav buttons
+    // Mode Switcher Buttons
+    document.querySelectorAll('.nav-view-btn').forEach(btn => {
+      btn.addEventListener('click', () => switchView(btn.dataset.view));
+    });
+
+    // Top Nav buttons
     document.getElementById('btnCommitChanges').addEventListener('click', commitChanges);
-    document.getElementById('btnOpenLibrary').addEventListener('click', openLibraryModal);
     document.getElementById('btnShortcuts').addEventListener('click', toggleShortcutsModal);
     document.getElementById('btnAuthSettings').addEventListener('click', openAuthModal);
 
@@ -1163,7 +1653,7 @@
       if (e.key === 'Enter') searchExternal(searchInput.value);
     });
 
-    // Workspace tabs
+    // Studio workspace tabs
     const tabGrid = document.getElementById('tabBtnGrid');
     const tabDiff = document.getElementById('tabBtnDiff');
     const gridContainer = document.getElementById('gridContainer');
@@ -1221,19 +1711,40 @@
     document.getElementById('btnOffsetPlus500').addEventListener('click', () => shiftLyricsOffset(500));
     document.getElementById('btnFetchLrcLib').addEventListener('click', fetchLyricsForActiveTrack);
 
-    // Modals
-    document.getElementById('btnCloseLibraryModal').addEventListener('click', () => document.getElementById('modalLibrary').classList.remove('active'));
-    document.getElementById('btnDismissLibraryModal').addEventListener('click', () => document.getElementById('modalLibrary').classList.remove('active'));
-    document.getElementById('libFilterInput').addEventListener('input', filterLibraryList);
+    // Downloader events
+    document.getElementById('btnStartDownload').addEventListener('click', triggerDownload);
+    document.getElementById('downloaderUrlInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') triggerDownload();
+    });
+    document.getElementById('btnRefreshTasks').addEventListener('click', fetchDownloaderTasks);
+    document.getElementById('btnRefreshRequests').addEventListener('click', fetchMusicRequests);
+    document.getElementById('btnSubmitRequest').addEventListener('click', submitNewRequest);
+    document.getElementById('requestQueryInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitNewRequest();
+    });
+    document.getElementById('btnClearRequests').addEventListener('click', clearCompletedRequests);
 
-    document.getElementById('btnCloseShortcutsModal').addEventListener('click', () => document.getElementById('modalShortcuts').classList.remove('active'));
-    document.getElementById('btnDismissShortcutsModal').addEventListener('click', () => document.getElementById('modalShortcuts').classList.remove('active'));
+    // Quality selector pills
+    document.querySelectorAll('.quality-pill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        document.querySelectorAll('.quality-pill').forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        state.selectedQuality = pill.dataset.quality;
+      });
+    });
+
+    // Library view filter
+    document.getElementById('libViewFilterInput').addEventListener('input', filterLibraryTree);
+
+    // Modals
+    document.getElementById('btnCloseShortcutsModal').addEventListener('click', toggleShortcutsModal);
+    document.getElementById('btnDismissShortcutsModal').addEventListener('click', toggleShortcutsModal);
 
     document.getElementById('btnCloseAuthModal').addEventListener('click', () => document.getElementById('modalAuth').classList.remove('active'));
     document.getElementById('btnDismissAuthModal').addEventListener('click', () => document.getElementById('modalAuth').classList.remove('active'));
     document.getElementById('btnSaveAuthToken').addEventListener('click', saveAuthToken);
 
-    // Back to hub button subpath resolution
+    // Back to dashboard link
     document.getElementById('btnDashboardLink').href = getApiUrl('/');
   }
 
@@ -1242,14 +1753,12 @@
     initKeyboardNavigation();
     initUiEvents();
 
-    // Check URL parameters for path
     const params = new URLSearchParams(window.location.search);
     const targetPath = params.get('path');
     if (targetPath) {
       inspectPath(targetPath);
     } else {
-      // Auto open library browser modal to let user pick album
-      openLibraryModal();
+      switchView('library');
     }
   }
 
