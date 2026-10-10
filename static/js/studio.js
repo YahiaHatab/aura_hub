@@ -1177,11 +1177,106 @@
     }
   }
 
+  // ================= EXPANDED LIBRARY BROWSER WITH ARTIST TREE =================
   function getLibraryContainer() {
-    return document.getElementById('artistTreeContainer') || document.getElementById('library-list') || document.querySelector('.library-list');
+    return document.getElementById('library-list') || document.querySelector('.library-albums-container') || document.getElementById('artistTreeContainer');
   }
 
-  // ================= EXPANDED LIBRARY BROWSER WITH ARTIST TREE =================
+  // Global accordion toggler
+  window.toggleArtistGroup = function(btn) {
+    const group = btn.closest('.artist-tree-group');
+    if (!group) return;
+    const grid = group.querySelector('.artist-albums-grid');
+    const chevron = group.querySelector('.chevron-icon') || group.querySelector('.artist-toggle-icon');
+    if (!grid) return;
+    const isOpen = grid.style.display !== 'none';
+
+    grid.style.display = isOpen ? 'none' : 'grid';
+    group.classList.toggle('collapsed', isOpen);
+    if (chevron) {
+      chevron.textContent = isOpen ? '▶' : '▼';
+    }
+  };
+
+  // Global loader to open album in studio editor
+  window.loadAlbumIntoStudio = function(path) {
+    if (!path) return;
+    inspectPath(path);
+  };
+
+  function renderLibraryList(albums) {
+    const container = getLibraryContainer();
+    if (!container) return;
+
+    if (!albums || albums.length === 0) {
+      container.innerHTML = '<div class="empty-state">No albums found in library.</div>';
+      return;
+    }
+
+    // Group by artist cleanly
+    const artistMap = {};
+    albums.forEach(rawAlb => {
+      const albPath = rawAlb.path || rawAlb.folder || '';
+      const albTitle = rawAlb.title || rawAlb.album || 'Unknown Album';
+      const artist = rawAlb.artist || rawAlb.album_artist || 'Unknown Artist';
+      const coverUrl = rawAlb.cover_url || (albPath ? getApiUrl(`/api/cover?path=${encodeURIComponent(albPath)}`) : '/static/img/cover-placeholder.png');
+
+      const album = {
+        ...rawAlb,
+        path: albPath,
+        folder: albPath,
+        title: albTitle,
+        album: albTitle,
+        artist: artist,
+        cover_url: coverUrl,
+        track_count: rawAlb.track_count || 0,
+        year: rawAlb.year || '',
+      };
+
+      if (!artistMap[artist]) artistMap[artist] = [];
+      artistMap[artist].push(album);
+    });
+
+    const sortedArtists = Object.keys(artistMap).sort((a, b) => a.localeCompare(b));
+
+    container.innerHTML = sortedArtists.map((artist) => {
+      const artistAlbums = artistMap[artist];
+      const albumCount = artistAlbums.length;
+      
+      return `
+        <div class="artist-tree-group" data-artist="${escapeHtml(artist)}">
+          <button type="button" class="artist-tree-header" onclick="toggleArtistGroup(this)">
+            <div class="artist-header-left">
+              <span class="chevron-icon">▶</span>
+              <span class="artist-name">${escapeHtml(artist)}</span>
+            </div>
+            <span class="artist-count-pill">${albumCount} ${albumCount === 1 ? 'album' : 'albums'}</span>
+          </button>
+          <div class="artist-albums-grid" style="display: none;">
+            ${artistAlbums.map(alb => `
+              <div class="library-album-card" onclick="loadAlbumIntoStudio('${escapeHtml(alb.path)}')">
+                <div class="album-card-cover">
+                  <img src="${alb.cover_url || '/static/img/cover-placeholder.png'}" 
+                       alt="${escapeHtml(alb.title)}" 
+                       loading="lazy"
+                       onerror="this.onerror=null; this.src='/static/img/cover-placeholder.png';" />
+                </div>
+                <div class="album-card-meta">
+                  <div class="album-card-title" title="${escapeHtml(alb.title)}">${escapeHtml(alb.title)}</div>
+                  <div class="album-card-sub">
+                    ${alb.year ? `<span>${alb.year}</span> • ` : ''}<span>${alb.track_count || 0} tracks</span>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  const renderArtistTree = renderLibraryList;
+
   async function loadLibraryTree() {
     const container = getLibraryContainer();
     const summary = document.getElementById('libraryStatsSummary');
@@ -1191,25 +1286,28 @@
 
     try {
       const res = await apiRequest('/api/library');
-      state.libraryAlbums = res.albums || [];
+      state.libraryAlbums = (res.albums || []).map(alb => ({
+        ...alb,
+        path: alb.path || alb.folder || '',
+        folder: alb.folder || alb.path || '',
+        title: alb.title || alb.album || 'Unknown Album',
+        album: alb.album || alb.title || 'Unknown Album',
+        artist: alb.artist || alb.album_artist || 'Unknown Artist',
+        cover_url: alb.cover_url || getApiUrl(`/api/cover?path=${encodeURIComponent(alb.path || alb.folder || '')}`),
+      }));
 
-      // Group by Artist into Map<Artist, Album[]>
-      const artistMap = new Map();
+      // Count unique artists and tracks
+      const artistSet = new Set();
       let totalTracks = 0;
-
       state.libraryAlbums.forEach(alb => {
-        const art = alb.artist || 'Various Artists';
-        if (!artistMap.has(art)) {
-          artistMap.set(art, []);
-        }
-        artistMap.get(art).push(alb);
+        artistSet.add(alb.artist);
         totalTracks += (alb.track_count || 0);
       });
 
       if (summary) {
-        summary.textContent = `${state.libraryAlbums.length} albums across ${artistMap.size} artists (${totalTracks} tracks)`;
+        summary.textContent = `${state.libraryAlbums.length} albums across ${artistSet.size} artists (${totalTracks} tracks)`;
       }
-      renderArtistTree(artistMap);
+      renderLibraryList(state.libraryAlbums);
     } catch (err) {
       if (container) {
         container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--accent-rose);">Failed to load library: ${escapeHtml(err.message)}</div>`;
@@ -1217,93 +1315,17 @@
     }
   }
 
-  function renderArtistTree(artistMap, filterQuery = '') {
-    const container = getLibraryContainer();
-    if (!container) return;
-    container.innerHTML = '';
-
-    const cleanFilter = filterQuery.toLowerCase().trim();
-    const sortedArtists = Array.from(artistMap.keys()).sort((a, b) => a.localeCompare(b));
-
-    let matchedArtistsCount = 0;
-
-    sortedArtists.forEach(artist => {
-      const albums = artistMap.get(artist);
-      const filteredAlbums = cleanFilter
-        ? albums.filter(a => a.album.toLowerCase().includes(cleanFilter) || artist.toLowerCase().includes(cleanFilter))
-        : albums;
-
-      if (cleanFilter && !filteredAlbums.length) return;
-      matchedArtistsCount++;
-
-      const group = document.createElement('div');
-      group.className = 'artist-tree-group';
-
-      const totalTracksInGroup = filteredAlbums.reduce((sum, a) => sum + (a.track_count || 0), 0);
-
-      const header = document.createElement('div');
-      header.className = 'artist-tree-header';
-      header.innerHTML = `
-        <div class="artist-header-left">
-          <span class="artist-toggle-icon">▾</span>
-          <span class="artist-name-title">${escapeHtml(artist)}</span>
-        </div>
-        <span class="artist-album-count-badge">${filteredAlbums.length} album(s) • ${totalTracksInGroup} tracks</span>
-      `;
-
-      header.addEventListener('click', () => {
-        group.classList.toggle('collapsed');
-      });
-
-      const grid = document.createElement('div');
-      grid.className = 'artist-albums-grid';
-
-      filteredAlbums.forEach(alb => {
-        const card = document.createElement('div');
-        card.className = 'library-album-card';
-        
-        const coverUrl = getApiUrl(`/api/cover?path=${encodeURIComponent(alb.folder)}`);
-        card.innerHTML = `
-          <div class="album-card-cover-wrap">
-            <img class="album-card-cover" src="${coverUrl}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'><rect fill=\\'%231a1e2d\\' width=\\'24\\' height=\\'24\\'/></svg>'">
-          </div>
-          <div class="album-card-meta">
-            <div class="album-card-title" title="${escapeHtml(alb.album)}">${escapeHtml(alb.album)}</div>
-            <div class="album-card-artist" title="${escapeHtml(alb.artist)}">${escapeHtml(alb.artist)}</div>
-            <div class="album-card-counts">
-              <span>${alb.track_count || 0} tracks</span>
-              <span class="lrc-badge ${alb.lrc_count ? 'synced' : 'missing'}">${alb.lrc_count ? `${alb.lrc_count} LRC` : 'No LRC'}</span>
-            </div>
-          </div>
-        `;
-
-        card.addEventListener('click', (e) => {
-          e.stopPropagation();
-          inspectPath(alb.folder);
-        });
-
-        grid.appendChild(card);
-      });
-
-      group.appendChild(header);
-      group.appendChild(grid);
-      container.appendChild(group);
-    });
-
-    if (matchedArtistsCount === 0) {
-      container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-dim);">No artists or albums match "${escapeHtml(filterQuery)}".</div>`;
-    }
-  }
-
   function filterLibraryTree() {
-    const query = document.getElementById('libViewFilterInput').value;
-    const artistMap = new Map();
-    state.libraryAlbums.forEach(alb => {
-      const art = alb.artist || 'Various Artists';
-      if (!artistMap.has(art)) artistMap.set(art, []);
-      artistMap.get(art).push(alb);
-    });
-    renderArtistTree(artistMap, query);
+    const query = (document.getElementById('libViewFilterInput')?.value || '').toLowerCase().trim();
+    if (!query) {
+      renderLibraryList(state.libraryAlbums);
+      return;
+    }
+    const filtered = state.libraryAlbums.filter(a =>
+      (a.title || a.album || '').toLowerCase().includes(query) ||
+      (a.artist || '').toLowerCase().includes(query)
+    );
+    renderLibraryList(filtered);
   }
 
   // ================= VIEW 2: DOWNLOADER & TASK POLLING =================
