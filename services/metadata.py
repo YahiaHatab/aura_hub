@@ -1607,3 +1607,200 @@ def search_track_metadata_candidates(
             return pool.submit(lambda: asyncio.run(coro)).result()
     else:
         return asyncio.run(coro)
+
+
+async def fetch_lrclib_lyrics_async(track: str, artist: str = "") -> Dict[str, str]:
+    """Queries LRCLIB for synced and plain lyrics."""
+    if not track:
+        return {"synced": "", "plain": ""}
+
+    headers = getattr(config, "MB_HEADERS", {"User-Agent": "AuraHub/1.0"})
+    artists_to_try = extract_clean_artists(artist) if artist else [""]
+    if not artists_to_try:
+        artists_to_try = [""]
+    title_variants = franco_to_arabic(track)
+
+    async with httpx.AsyncClient(timeout=8.0, headers=headers) as client:
+        for art in artists_to_try:
+            for tit in title_variants:
+                # 1. Exact match attempt
+                try:
+                    params = {"track_name": tit}
+                    if art:
+                        params["artist_name"] = art
+                    resp = await client.get("https://lrclib.net/api/get", params=params)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        synced = data.get("syncedLyrics") or ""
+                        plain = data.get("plainLyrics") or ""
+                        if synced or plain:
+                            return {"synced": synced, "plain": plain}
+                except Exception:
+                    pass
+
+                # 2. Search fallback
+                try:
+                    query_str = f"{art} {tit}".strip()
+                    resp = await client.get("https://lrclib.net/api/search", params={"q": query_str})
+                    if resp.status_code == 200:
+                        results = resp.json()
+                        if isinstance(results, list):
+                            for item in results:
+                                synced = item.get("syncedLyrics") or ""
+                                plain = item.get("plainLyrics") or ""
+                                if synced or plain:
+                                    return {"synced": synced, "plain": plain}
+                except Exception:
+                    pass
+
+    return {"synced": "", "plain": ""}
+
+
+async def search_metadata_async(
+    query: str,
+    type: str = "album",
+    artist: str = "",
+) -> List[Dict[str, Any]]:
+    """Unified metadata search querying MusicBrainz, Deezer, Spotify, iTunes, Discogs, and LRCLIB.
+
+    Calculates match confidence (0-100%), flags top candidate as recommended: true,
+    and returns normalized field payloads ready to populate the frontend studio form.
+    """
+    clean_q = query.strip()
+    clean_art = artist.strip()
+    is_track = type.lower() == "track"
+
+    candidates: List[MetadataCandidate] = []
+    if is_track:
+        cand_task = search_track_metadata_candidates_async(title=clean_q, artist=clean_art)
+        lrc_task = fetch_lrclib_lyrics_async(track=clean_q, artist=clean_art)
+        cand_res, lrc_res = await asyncio.gather(cand_task, lrc_task, return_exceptions=True)
+
+        if isinstance(cand_res, list):
+            candidates = cand_res
+
+        synced_lyrics = lrc_res.get("synced", "") if isinstance(lrc_res, dict) else ""
+        plain_lyrics = lrc_res.get("plain", "") if isinstance(lrc_res, dict) else ""
+
+        if synced_lyrics or plain_lyrics:
+            for c in candidates:
+                if c.track_data:
+                    if not c.track_data.lyrics_synced and synced_lyrics:
+                        c.track_data.lyrics_synced = synced_lyrics
+                    if not c.track_data.lyrics_unsynced and plain_lyrics:
+                        c.track_data.lyrics_unsynced = plain_lyrics
+                    c.preview["has_lyrics"] = True
+
+            if not candidates and (synced_lyrics or plain_lyrics):
+                conf = 85.0
+                cand_lrclib = MetadataCandidate(
+                    source="LRCLIB",
+                    confidence_score=conf,
+                    is_recommended=True,
+                    track_data=UnifiedTrackMetadata(
+                        title=clean_q,
+                        artist=clean_art,
+                        lyrics_synced=synced_lyrics,
+                        lyrics_unsynced=plain_lyrics,
+                        source="LRCLIB",
+                    ),
+                    preview={
+                        "title": clean_q,
+                        "artist": clean_art,
+                        "album": "",
+                        "year": "",
+                        "genres": "",
+                        "has_cover": False,
+                        "has_producers": False,
+                        "has_composers": False,
+                        "has_lyrics": True,
+                        "cover_thumbnail": "",
+                        "confidence_percent": int(conf),
+                    },
+                )
+                candidates.append(cand_lrclib)
+    else:
+        cand_res = await search_album_metadata_candidates_async(album_name=clean_q, artist_name=clean_art)
+        if isinstance(cand_res, list):
+            candidates = cand_res
+
+    # Rank candidates and set recommendation
+    ranked = rank_and_recommend_candidates(candidates)
+
+    output_list: List[Dict[str, Any]] = []
+    for idx, c in enumerate(ranked):
+        c_dict = c.to_dict()
+        is_rec = bool(idx == 0 and c.confidence_score >= 40.0)
+        c_dict["is_recommended"] = is_rec
+        c_dict["recommended"] = is_rec
+
+        fields: Dict[str, Any] = {}
+        if c.track_data:
+            t = c.track_data
+            fields = {
+                "title": t.title,
+                "artist": t.artist,
+                "album": t.album,
+                "album_artist": t.album_artist or t.artist,
+                "track_number": t.track_number,
+                "total_tracks": t.total_tracks,
+                "disc_number": t.disc_number,
+                "total_discs": t.total_discs,
+                "year": t.year,
+                "date": t.year,
+                "genre": t.genre or (", ".join(t.genres[:2]) if t.genres else ""),
+                "composers": ", ".join(t.composers) if t.composers else "",
+                "producers": ", ".join(t.producers) if t.producers else "",
+                "arrangers": ", ".join(t.arrangers) if t.arrangers else "",
+                "lyricists": ", ".join(t.lyricists) if t.lyricists else "",
+                "lyrics_synced": t.lyrics_synced,
+                "lyrics_unsynced": t.lyrics_unsynced,
+                "cover_url": t.cover_url,
+            }
+        elif c.album_data:
+            a = c.album_data
+            fields = {
+                "title": a.album,
+                "artist": a.artist,
+                "album": a.album,
+                "album_artist": a.album_artist or a.artist,
+                "track_number": 1,
+                "total_tracks": a.total_tracks or len(a.tracks) or 1,
+                "disc_number": 1,
+                "total_discs": a.total_discs or 1,
+                "year": a.year,
+                "date": a.year,
+                "genre": a.genre or (", ".join(a.genres[:2]) if a.genres else ""),
+                "composers": ", ".join(a.composers) if a.composers else "",
+                "producers": ", ".join(a.producers) if a.producers else "",
+                "arrangers": "",
+                "lyricists": "",
+                "lyrics_synced": "",
+                "lyrics_unsynced": "",
+                "cover_url": a.cover_url,
+            }
+
+        c_dict["fields"] = fields
+        output_list.append(c_dict)
+
+    return output_list
+
+
+def search_metadata(
+    query: str,
+    type: str = "album",
+    artist: str = "",
+) -> List[Dict[str, Any]]:
+    """Synchronous interface for unified metadata search."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    coro = search_metadata_async(query, type, artist)
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(lambda: asyncio.run(coro)).result()
+    else:
+        return asyncio.run(coro)
+

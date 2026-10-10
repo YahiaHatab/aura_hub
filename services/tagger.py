@@ -171,6 +171,701 @@ def find_best_track_match(
 
 
 # =====================================================================
+# METADATA STUDIO GRANULAR TAG INSPECTION & WRITING
+# =====================================================================
+
+def extract_cover_bytes(file_path: Union[str, Path]) -> Optional[Tuple[bytes, str]]:
+    """Extracts binary cover artwork and MIME type from an audio file or album directory."""
+    path = Path(file_path)
+    if path.is_dir():
+        for cov_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png"):
+            cov_file = path / cov_name
+            if cov_file.is_file() and cov_file.stat().st_size > 0:
+                mime = "image/png" if cov_file.suffix.lower() == ".png" else "image/jpeg"
+                return cov_file.read_bytes(), mime
+        # Fallback to inspecting first audio file in directory
+        audio_files = sorted(
+            [f for f in path.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS],
+            key=lambda x: x.name,
+        )
+        for af in audio_files:
+            res = extract_cover_bytes(af)
+            if res:
+                return res
+        return None
+
+    if not path.is_file():
+        return None
+
+    ext = path.suffix.lower()
+    try:
+        if ext == ".mp3":
+            try:
+                id3 = ID3(str(path))
+                apics = id3.getall("APIC")
+                if apics:
+                    pic = apics[0]
+                    mime = getattr(pic, "mime", "image/jpeg") or "image/jpeg"
+                    return pic.data, mime
+            except ID3NoHeaderError:
+                pass
+        elif ext == ".flac":
+            fl = FLAC(str(path))
+            if fl.pictures:
+                pic = fl.pictures[0]
+                return pic.data, pic.mime or "image/jpeg"
+        elif ext == ".opus":
+            op = OggOpus(str(path))
+            mbp = op.get("metadata_block_picture")
+            if mbp:
+                pic_data = base64.b64decode(mbp[0])
+                p = Picture(pic_data)
+                return p.data, p.mime or "image/jpeg"
+        elif ext == ".m4a":
+            mp = MP4(str(path))
+            covrs = mp.get("covr")
+            if covrs:
+                c = covrs[0]
+                mime = "image/png" if getattr(c, "imageformat", None) == MP4Cover.FORMAT_PNG else "image/jpeg"
+                return bytes(c), mime
+    except Exception as e:
+        logger.debug(f"Failed to extract cover from {path.name}: {e}")
+
+    # Fallback to sibling loose cover if exists
+    for cov_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png"):
+        cov_file = path.parent / cov_name
+        if cov_file.is_file() and cov_file.stat().st_size > 0:
+            mime = "image/png" if cov_file.suffix.lower() == ".png" else "image/jpeg"
+            return cov_file.read_bytes(), mime
+
+    return None
+
+
+def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
+    """Reads comprehensive ID3, Vorbis, or MP4 tags, lyrics, and artwork metadata.
+
+    Supports individual files and whole album folders.
+    """
+    path = Path(file_path)
+    if path.is_dir():
+        audio_files = sorted(
+            [f for f in path.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS],
+            key=lambda x: x.name,
+        )
+        tracks = [read_tags(f) for f in audio_files]
+
+        album_name = path.name
+        artist_name = path.parent.name if path.parent != config.BASE_DOWNLOAD_DIR else ""
+        album_artist_name = artist_name
+        year = ""
+        genre = ""
+        composers: List[str] = []
+        producers: List[str] = []
+
+        for t in tracks:
+            if t.get("album") and (not album_name or album_name == path.name):
+                album_name = t["album"]
+            if t.get("artist") and not artist_name:
+                artist_name = t["artist"]
+            if t.get("album_artist") and not album_artist_name:
+                album_artist_name = t["album_artist"]
+            if t.get("year") and not year:
+                year = t["year"]
+            if t.get("genre") and not genre:
+                genre = t["genre"]
+            if t.get("composers") and not composers:
+                composers = t["composers"]
+            if t.get("producers") and not producers:
+                producers = t["producers"]
+
+        has_loose_cover = any(
+            (path / c).is_file() and (path / c).stat().st_size > 0
+            for c in ("cover.jpg", "cover.png", "folder.jpg", "folder.png")
+        )
+
+        return {
+            "path": str(path),
+            "folder": str(path.name),
+            "is_dir": True,
+            "album": album_name,
+            "artist": artist_name,
+            "album_artist": album_artist_name or artist_name,
+            "year": year,
+            "genre": genre,
+            "composers": composers,
+            "producers": producers,
+            "has_cover": has_loose_cover or any(t.get("has_cover") for t in tracks),
+            "has_loose_cover": has_loose_cover,
+            "track_count": len(tracks),
+            "lrc_count": sum(1 for t in tracks if t.get("has_lrc")),
+            "tracks": tracks,
+        }
+
+    ext = path.suffix.lower()
+    info: Dict[str, Any] = {
+        "path": str(path),
+        "filename": path.name,
+        "format": ext.lstrip("."),
+        "is_dir": False,
+        "title": path.stem,
+        "artist": "",
+        "album_artist": "",
+        "album": "",
+        "year": "",
+        "date": "",
+        "track_number": 1,
+        "total_tracks": 1,
+        "disc_number": 1,
+        "total_discs": 1,
+        "genre": "",
+        "composers": [],
+        "producers": [],
+        "arrangers": [],
+        "lyricists": [],
+        "lyrics_unsynced": "",
+        "lyrics_synced": "",
+        "duration_seconds": 0.0,
+        "has_cover": False,
+        "cover_mime": "",
+        "cover_size": 0,
+        "has_lrc": path.with_suffix(".lrc").is_file(),
+    }
+
+    try:
+        mut_file = mutagen.File(str(path))
+        if mut_file and getattr(mut_file, "info", None) and hasattr(mut_file.info, "length"):
+            info["duration_seconds"] = round(float(mut_file.info.length), 1)
+    except Exception:
+        pass
+
+    # Check companion .lrc
+    lrc_file = path.with_suffix(".lrc")
+    if lrc_file.is_file():
+        try:
+            info["lyrics_synced"] = lrc_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    try:
+        if ext == ".mp3":
+            try:
+                id3 = ID3(str(path))
+                if "TIT2" in id3 and id3["TIT2"].text: info["title"] = str(id3["TIT2"].text[0])
+                if "TPE1" in id3 and id3["TPE1"].text: info["artist"] = str(id3["TPE1"].text[0])
+                if "TPE2" in id3 and id3["TPE2"].text: info["album_artist"] = str(id3["TPE2"].text[0])
+                if "TALB" in id3 and id3["TALB"].text: info["album"] = str(id3["TALB"].text[0])
+                if "TDRC" in id3 and id3["TDRC"].text:
+                    info["date"] = str(id3["TDRC"].text[0])
+                    info["year"] = info["date"][:4]
+                if "TCON" in id3 and id3["TCON"].text: info["genre"] = str(id3["TCON"].text[0])
+                if "TRCK" in id3 and id3["TRCK"].text:
+                    trck = str(id3["TRCK"].text[0])
+                    if "/" in trck:
+                        p = trck.split("/", 1)
+                        if p[0].isdigit(): info["track_number"] = int(p[0])
+                        if p[1].isdigit(): info["total_tracks"] = int(p[1])
+                    elif trck.isdigit():
+                        info["track_number"] = int(trck)
+                if "TPOS" in id3 and id3["TPOS"].text:
+                    tpos = str(id3["TPOS"].text[0])
+                    if "/" in tpos:
+                        p = tpos.split("/", 1)
+                        if p[0].isdigit(): info["disc_number"] = int(p[0])
+                        if p[1].isdigit(): info["total_discs"] = int(p[1])
+                    elif tpos.isdigit():
+                        info["disc_number"] = int(tpos)
+                if "TCOM" in id3 and id3["TCOM"].text:
+                    info["composers"] = [c.strip() for c in str(id3["TCOM"].text[0]).split(",") if c.strip()]
+                if "TEXT" in id3 and id3["TEXT"].text:
+                    info["lyricists"] = [l.strip() for l in str(id3["TEXT"].text[0]).split(",") if l.strip()]
+                for txxx in id3.getall("TXXX"):
+                    d_upper = txxx.desc.upper()
+                    if d_upper == "PRODUCER":
+                        info["producers"] = [p.strip() for p in str(txxx.text[0]).split(",") if p.strip()]
+                    elif d_upper == "ARRANGER":
+                        info["arrangers"] = [a.strip() for a in str(txxx.text[0]).split(",") if a.strip()]
+                if not info["producers"]:
+                    for ipls in id3.getall("IPLS"):
+                        for role, person in getattr(ipls, "people", []):
+                            if "producer" in str(role).lower() and person:
+                                info["producers"].extend([p.strip() for p in str(person).split(",") if p.strip()])
+                uslts = id3.getall("USLT")
+                if uslts:
+                    info["lyrics_unsynced"] = str(uslts[0].text)
+                apics = id3.getall("APIC")
+                if apics:
+                    info["has_cover"] = True
+                    info["cover_mime"] = getattr(apics[0], "mime", "image/jpeg") or "image/jpeg"
+                    info["cover_size"] = len(apics[0].data) if hasattr(apics[0], "data") else 0
+            except ID3NoHeaderError:
+                pass
+
+        elif ext == ".flac":
+            fl = FLAC(str(path))
+            if "title" in fl and fl["title"]: info["title"] = fl["title"][0]
+            if "artist" in fl and fl["artist"]: info["artist"] = fl["artist"][0]
+            if "albumartist" in fl and fl["albumartist"]: info["album_artist"] = fl["albumartist"][0]
+            if "album" in fl and fl["album"]: info["album"] = fl["album"][0]
+            if "date" in fl and fl["date"]:
+                info["date"] = fl["date"][0]
+                info["year"] = info["date"][:4]
+            if "genre" in fl and fl["genre"]: info["genre"] = fl["genre"][0]
+            if "tracknumber" in fl and fl["tracknumber"] and fl["tracknumber"][0].isdigit():
+                info["track_number"] = int(fl["tracknumber"][0])
+            tot = fl.get("totaltracks") or fl.get("tracktotal")
+            if tot and tot[0].isdigit():
+                info["total_tracks"] = int(tot[0])
+            if "discnumber" in fl and fl["discnumber"] and fl["discnumber"][0].isdigit():
+                info["disc_number"] = int(fl["discnumber"][0])
+            tot_d = fl.get("totaldiscs") or fl.get("disctotal")
+            if tot_d and tot_d[0].isdigit():
+                info["total_discs"] = int(tot_d[0])
+            if "composer" in fl: info["composers"] = list(fl["composer"])
+            if "producer" in fl: info["producers"] = list(fl["producer"])
+            if "arranger" in fl: info["arrangers"] = list(fl["arranger"])
+            if "lyricist" in fl: info["lyricists"] = list(fl["lyricist"])
+            if "lyrics" in fl and fl["lyrics"]:
+                info["lyrics_unsynced"] = fl["lyrics"][0]
+            if fl.pictures:
+                info["has_cover"] = True
+                info["cover_mime"] = fl.pictures[0].mime or "image/jpeg"
+                info["cover_size"] = len(fl.pictures[0].data)
+
+        elif ext == ".opus":
+            op = OggOpus(str(path))
+            if "title" in op and op["title"]: info["title"] = op["title"][0]
+            if "artist" in op and op["artist"]: info["artist"] = op["artist"][0]
+            if "albumartist" in op and op["albumartist"]: info["album_artist"] = op["albumartist"][0]
+            if "album" in op and op["album"]: info["album"] = op["album"][0]
+            if "date" in op and op["date"]:
+                info["date"] = op["date"][0]
+                info["year"] = info["date"][:4]
+            if "genre" in op and op["genre"]: info["genre"] = op["genre"][0]
+            if "tracknumber" in op and op["tracknumber"] and op["tracknumber"][0].isdigit():
+                info["track_number"] = int(op["tracknumber"][0])
+            tot = op.get("totaltracks") or op.get("tracktotal")
+            if tot and tot[0].isdigit():
+                info["total_tracks"] = int(tot[0])
+            if "discnumber" in op and op["discnumber"] and op["discnumber"][0].isdigit():
+                info["disc_number"] = int(op["discnumber"][0])
+            tot_d = op.get("totaldiscs") or op.get("disctotal")
+            if tot_d and tot_d[0].isdigit():
+                info["total_discs"] = int(tot_d[0])
+            if "composer" in op: info["composers"] = list(op["composer"])
+            if "producer" in op: info["producers"] = list(op["producer"])
+            if "arranger" in op: info["arrangers"] = list(op["arranger"])
+            if "lyricist" in op: info["lyricists"] = list(op["lyricist"])
+            if "lyrics" in op and op["lyrics"]:
+                info["lyrics_unsynced"] = op["lyrics"][0]
+            mbp = op.get("metadata_block_picture")
+            if mbp:
+                try:
+                    p = Picture(base64.b64decode(mbp[0]))
+                    info["has_cover"] = True
+                    info["cover_mime"] = p.mime or "image/jpeg"
+                    info["cover_size"] = len(p.data)
+                except Exception:
+                    info["has_cover"] = True
+
+        elif ext == ".m4a":
+            mp = MP4(str(path))
+            if "\xa9nam" in mp and mp["\xa9nam"]: info["title"] = mp["\xa9nam"][0]
+            if "\xa9ART" in mp and mp["\xa9ART"]: info["artist"] = mp["\xa9ART"][0]
+            if "aART" in mp and mp["aART"]: info["album_artist"] = mp["aART"][0]
+            if "\xa9alb" in mp and mp["\xa9alb"]: info["album"] = mp["\xa9alb"][0]
+            if "\xa9day" in mp and mp["\xa9day"]:
+                info["date"] = str(mp["\xa9day"][0])
+                info["year"] = info["date"][:4]
+            if "\xa9gen" in mp and mp["\xa9gen"]: info["genre"] = mp["\xa9gen"][0]
+            if "trkn" in mp and mp["trkn"]:
+                info["track_number"] = mp["trkn"][0][0]
+                info["total_tracks"] = mp["trkn"][0][1]
+            if "disk" in mp and mp["disk"]:
+                info["disc_number"] = mp["disk"][0][0]
+                info["total_discs"] = mp["disk"][0][1]
+            if "\xa9wrt" in mp and mp["\xa9wrt"]:
+                info["composers"] = [c.strip() for c in str(mp["\xa9wrt"][0]).split(",") if c.strip()]
+            prod = mp.get("----:com.apple.iTunes:PRODUCER")
+            if prod:
+                try:
+                    info["producers"] = [p.strip() for p in prod[0].decode("utf-8").split(",") if p.strip()]
+                except Exception:
+                    pass
+            if "\xa9lyr" in mp and mp["\xa9lyr"]:
+                info["lyrics_unsynced"] = mp["\xa9lyr"][0]
+            if "covr" in mp and mp["covr"]:
+                c = mp["covr"][0]
+                info["has_cover"] = True
+                info["cover_mime"] = "image/png" if getattr(c, "imageformat", None) == MP4Cover.FORMAT_PNG else "image/jpeg"
+                info["cover_size"] = len(bytes(c))
+
+    except Exception as e:
+        logger.warning(f"Error parsing audio tags for {path.name}: {e}")
+
+    return info
+
+
+def write_tags(
+    file_path: Union[str, Path],
+    fields: Dict[str, Any],
+    cover_bytes: Optional[bytes] = None,
+) -> bool:
+    """Updates only the supplied fields cleanly using Mutagen without stripping unedited tags.
+
+    Handles single tracks and batch album folder operations.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        logger.warning(f"write_tags target does not exist: {path}")
+        return False
+
+    # 1. Directory / Album batch operation
+    if path.is_dir():
+        if cover_bytes:
+            write_loose_cover(path, cover_bytes)
+
+        audio_files = sorted(
+            [f for f in path.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS],
+            key=lambda x: x.name,
+        )
+        if not audio_files:
+            return True
+
+        tracks_data = fields.get("tracks")
+        if isinstance(tracks_data, list) and len(tracks_data) > 0:
+            file_map = {f.name: f for f in audio_files}
+            all_ok = True
+            for idx, t_dict in enumerate(tracks_data):
+                t_filename = t_dict.get("filename")
+                target_f = file_map.get(t_filename) if t_filename else (audio_files[idx] if idx < len(audio_files) else None)
+                if target_f:
+                    merged = dict(fields)
+                    merged.pop("tracks", None)
+                    merged.update(t_dict)
+                    ok = write_tags(target_f, merged, cover_bytes)
+                    if not ok:
+                        all_ok = False
+            return all_ok
+
+        all_ok = True
+        common_fields = dict(fields)
+        common_fields.pop("tracks", None)
+        if len(audio_files) > 1:
+            common_fields.pop("title", None)
+            common_fields.pop("track_number", None)
+
+        for af in audio_files:
+            ok = write_tags(af, common_fields, cover_bytes)
+            if not ok:
+                all_ok = False
+        return all_ok
+
+    # 2. Single audio track update
+    ext = path.suffix.lower()
+    if ext not in SUPPORTED_AUDIO_EXTENSIONS:
+        return False
+
+    # Companion .lrc handling
+    if "lyrics_synced" in fields and fields["lyrics_synced"] is not None:
+        lrc_text = str(fields["lyrics_synced"]).strip()
+        lrc_path = path.with_suffix(".lrc")
+        if lrc_text:
+            try:
+                lrc_path.write_text(lrc_text, encoding="utf-8")
+                logger.info(f"Updated companion .lrc for {path.name}")
+            except Exception as e:
+                logger.warning(f"Failed to write companion .lrc: {e}")
+        elif lrc_path.is_file():
+            try:
+                lrc_path.unlink()
+            except Exception:
+                pass
+
+    try:
+        # A. MP3 (ID3v2.3)
+        if ext == ".mp3":
+            try:
+                audio = ID3(str(path))
+            except ID3NoHeaderError:
+                audio = ID3()
+
+            if "title" in fields and fields["title"] is not None:
+                audio.delall("TIT2")
+                if str(fields["title"]).strip():
+                    audio.add(TIT2(encoding=3, text=str(fields["title"]).strip()))
+
+            if "artist" in fields and fields["artist"] is not None:
+                audio.delall("TPE1")
+                if str(fields["artist"]).strip():
+                    audio.add(TPE1(encoding=3, text=str(fields["artist"]).strip()))
+
+            if "album_artist" in fields and fields["album_artist"] is not None:
+                audio.delall("TPE2")
+                if str(fields["album_artist"]).strip():
+                    audio.add(TPE2(encoding=3, text=str(fields["album_artist"]).strip()))
+
+            if "album" in fields and fields["album"] is not None:
+                audio.delall("TALB")
+                if str(fields["album"]).strip():
+                    audio.add(TALB(encoding=3, text=str(fields["album"]).strip()))
+
+            if ("track_number" in fields or "total_tracks" in fields):
+                curr_trck = 1
+                curr_tot = 1
+                if "TRCK" in audio and audio["TRCK"].text:
+                    raw_trck = str(audio["TRCK"].text[0])
+                    if "/" in raw_trck:
+                        p = raw_trck.split("/", 1)
+                        if p[0].isdigit(): curr_trck = int(p[0])
+                        if p[1].isdigit(): curr_tot = int(p[1])
+                    elif raw_trck.isdigit():
+                        curr_trck = int(raw_trck)
+                num = fields.get("track_number", curr_trck)
+                tot = fields.get("total_tracks", curr_tot)
+                audio.delall("TRCK")
+                audio.add(TRCK(encoding=3, text=f"{num}/{tot}"))
+
+            if ("disc_number" in fields or "total_discs" in fields):
+                curr_disc = 1
+                curr_tot_d = 1
+                if "TPOS" in audio and audio["TPOS"].text:
+                    raw_tpos = str(audio["TPOS"].text[0])
+                    if "/" in raw_tpos:
+                        p = raw_tpos.split("/", 1)
+                        if p[0].isdigit(): curr_disc = int(p[0])
+                        if p[1].isdigit(): curr_tot_d = int(p[1])
+                    elif raw_tpos.isdigit():
+                        curr_disc = int(raw_tpos)
+                num_d = fields.get("disc_number", curr_disc)
+                tot_d = fields.get("total_discs", curr_tot_d)
+                audio.delall("TPOS")
+                audio.add(TPOS(encoding=3, text=f"{num_d}/{tot_d}"))
+
+            if "year" in fields or "date" in fields:
+                yr = str(fields.get("year") or fields.get("date") or "").strip()
+                audio.delall("TDRC")
+                if yr:
+                    audio.add(TDRC(encoding=3, text=yr))
+
+            if "genre" in fields and fields["genre"] is not None:
+                audio.delall("TCON")
+                g = str(fields["genre"]).strip()
+                if g:
+                    audio.add(TCON(encoding=3, text=g))
+
+            if "composers" in fields and fields["composers"] is not None:
+                audio.delall("TCOM")
+                comps = fields["composers"]
+                c_str = ", ".join(comps) if isinstance(comps, list) else str(comps).strip()
+                if c_str:
+                    audio.add(TCOM(encoding=3, text=c_str))
+
+            if "lyricists" in fields and fields["lyricists"] is not None:
+                audio.delall("TEXT")
+                lyrs = fields["lyricists"]
+                l_str = ", ".join(lyrs) if isinstance(lyrs, list) else str(lyrs).strip()
+                if l_str:
+                    audio.add(TEXT(encoding=3, text=l_str))
+
+            if "producers" in fields and fields["producers"] is not None:
+                prods = fields["producers"]
+                p_str = ", ".join(prods) if isinstance(prods, list) else str(prods).strip()
+                for frame in list(audio.getall("TXXX")):
+                    if frame.desc.upper() == "PRODUCER":
+                        audio.delall(frame.HashKey)
+                audio.delall("IPLS")
+                if p_str:
+                    audio.add(TXXX(encoding=3, desc="PRODUCER", text=p_str))
+                    audio.add(IPLS(encoding=3, people=[("producer", p_str)]))
+
+            if "arrangers" in fields and fields["arrangers"] is not None:
+                arrs = fields["arrangers"]
+                a_str = ", ".join(arrs) if isinstance(arrs, list) else str(arrs).strip()
+                for frame in list(audio.getall("TXXX")):
+                    if frame.desc.upper() == "ARRANGER":
+                        audio.delall(frame.HashKey)
+                if a_str:
+                    audio.add(TXXX(encoding=3, desc="ARRANGER", text=a_str))
+
+            if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
+                audio.delall("USLT")
+                u_text = str(fields["lyrics_unsynced"]).strip()
+                if u_text:
+                    audio.add(USLT(encoding=3, lang="eng", desc="", text=u_text))
+
+            if cover_bytes:
+                audio.delall("APIC")
+                mime = "image/png" if cover_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                audio.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=cover_bytes))
+
+            audio.save(str(path), v2_version=3)
+            return True
+
+        # B. FLAC (Vorbis comments & Picture)
+        elif ext == ".flac":
+            audio = FLAC(str(path))
+            if "title" in fields and fields["title"] is not None:
+                audio["title"] = [str(fields["title"]).strip()]
+            if "artist" in fields and fields["artist"] is not None:
+                audio["artist"] = [str(fields["artist"]).strip()]
+            if "album_artist" in fields and fields["album_artist"] is not None:
+                audio["albumartist"] = [str(fields["album_artist"]).strip()]
+            if "album" in fields and fields["album"] is not None:
+                audio["album"] = [str(fields["album"]).strip()]
+            if "track_number" in fields and fields["track_number"] is not None:
+                audio["tracknumber"] = [str(fields["track_number"])]
+            if "total_tracks" in fields and fields["total_tracks"] is not None:
+                audio["totaltracks"] = [str(fields["total_tracks"])]
+                audio["tracktotal"] = [str(fields["total_tracks"])]
+            if "disc_number" in fields and fields["disc_number"] is not None:
+                audio["discnumber"] = [str(fields["disc_number"])]
+            if "total_discs" in fields and fields["total_discs"] is not None:
+                audio["totaldiscs"] = [str(fields["total_discs"])]
+                audio["disctotal"] = [str(fields["total_discs"])]
+            if "year" in fields or "date" in fields:
+                yr = str(fields.get("year") or fields.get("date") or "").strip()
+                if yr:
+                    audio["date"] = [yr]
+                    audio["year"] = [yr[:4]]
+            if "genre" in fields and fields["genre"] is not None:
+                audio["genre"] = [str(fields["genre"]).strip()]
+            if "composers" in fields and fields["composers"] is not None:
+                comps = fields["composers"]
+                audio["composer"] = comps if isinstance(comps, list) else [str(comps).strip()]
+            if "producers" in fields and fields["producers"] is not None:
+                prods = fields["producers"]
+                audio["producer"] = prods if isinstance(prods, list) else [str(prods).strip()]
+            if "arrangers" in fields and fields["arrangers"] is not None:
+                arrs = fields["arrangers"]
+                audio["arranger"] = arrs if isinstance(arrs, list) else [str(arrs).strip()]
+            if "lyricists" in fields and fields["lyricists"] is not None:
+                lyrs = fields["lyricists"]
+                audio["lyricist"] = lyrs if isinstance(lyrs, list) else [str(lyrs).strip()]
+            if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
+                audio["lyrics"] = [str(fields["lyrics_unsynced"]).strip()]
+
+            if cover_bytes:
+                audio.clear_pictures()
+                pic = Picture()
+                pic.data = cover_bytes
+                pic.type = 3
+                pic.mime = "image/png" if cover_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                pic.desc = "Cover"
+                audio.add_picture(pic)
+
+            audio.save()
+            return True
+
+        # C. Opus (OggOpus Vorbis comments & metadata_block_picture)
+        elif ext == ".opus":
+            audio = OggOpus(str(path))
+            if "title" in fields and fields["title"] is not None:
+                audio["title"] = [str(fields["title"]).strip()]
+            if "artist" in fields and fields["artist"] is not None:
+                audio["artist"] = [str(fields["artist"]).strip()]
+            if "album_artist" in fields and fields["album_artist"] is not None:
+                audio["albumartist"] = [str(fields["album_artist"]).strip()]
+            if "album" in fields and fields["album"] is not None:
+                audio["album"] = [str(fields["album"]).strip()]
+            if "track_number" in fields and fields["track_number"] is not None:
+                audio["tracknumber"] = [str(fields["track_number"])]
+            if "total_tracks" in fields and fields["total_tracks"] is not None:
+                audio["totaltracks"] = [str(fields["total_tracks"])]
+            if "disc_number" in fields and fields["disc_number"] is not None:
+                audio["discnumber"] = [str(fields["disc_number"])]
+            if "total_discs" in fields and fields["total_discs"] is not None:
+                audio["totaldiscs"] = [str(fields["total_discs"])]
+            if "year" in fields or "date" in fields:
+                yr = str(fields.get("year") or fields.get("date") or "").strip()
+                if yr:
+                    audio["date"] = [yr]
+            if "genre" in fields and fields["genre"] is not None:
+                audio["genre"] = [str(fields["genre"]).strip()]
+            if "composers" in fields and fields["composers"] is not None:
+                comps = fields["composers"]
+                audio["composer"] = comps if isinstance(comps, list) else [str(comps).strip()]
+            if "producers" in fields and fields["producers"] is not None:
+                prods = fields["producers"]
+                audio["producer"] = prods if isinstance(prods, list) else [str(prods).strip()]
+            if "arrangers" in fields and fields["arrangers"] is not None:
+                arrs = fields["arrangers"]
+                audio["arranger"] = arrs if isinstance(arrs, list) else [str(arrs).strip()]
+            if "lyricists" in fields and fields["lyricists"] is not None:
+                lyrs = fields["lyricists"]
+                audio["lyricist"] = lyrs if isinstance(lyrs, list) else [str(lyrs).strip()]
+            if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
+                audio["lyrics"] = [str(fields["lyrics_unsynced"]).strip()]
+
+            if cover_bytes:
+                pic = Picture()
+                pic.data = cover_bytes
+                pic.type = 3
+                pic.mime = "image/png" if cover_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                pic.desc = "Cover"
+                audio["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
+
+            audio.save()
+            return True
+
+        # D. M4A / MP4
+        elif ext == ".m4a":
+            audio = MP4(str(path))
+            if "title" in fields and fields["title"] is not None:
+                audio["\xa9nam"] = [str(fields["title"]).strip()]
+            if "artist" in fields and fields["artist"] is not None:
+                audio["\xa9ART"] = [str(fields["artist"]).strip()]
+            if "album_artist" in fields and fields["album_artist"] is not None:
+                audio["aART"] = [str(fields["album_artist"]).strip()]
+            if "album" in fields and fields["album"] is not None:
+                audio["\xa9alb"] = [str(fields["album"]).strip()]
+            if ("track_number" in fields or "total_tracks" in fields):
+                curr_trkn = audio.get("trkn", [(1, 1)])[0]
+                num = int(fields.get("track_number", curr_trkn[0]))
+                tot = int(fields.get("total_tracks", curr_trkn[1]))
+                audio["trkn"] = [(num, tot)]
+            if ("disc_number" in fields or "total_discs" in fields):
+                curr_disk = audio.get("disk", [(1, 1)])[0]
+                num_d = int(fields.get("disc_number", curr_disk[0]))
+                tot_d = int(fields.get("total_discs", curr_disk[1]))
+                audio["disk"] = [(num_d, tot_d)]
+            if "year" in fields or "date" in fields:
+                yr = str(fields.get("year") or fields.get("date") or "").strip()
+                if yr:
+                    audio["\xa9day"] = [yr]
+            if "genre" in fields and fields["genre"] is not None:
+                audio["\xa9gen"] = [str(fields["genre"]).strip()]
+            if "composers" in fields and fields["composers"] is not None:
+                comps = fields["composers"]
+                c_str = ", ".join(comps) if isinstance(comps, list) else str(comps).strip()
+                if c_str:
+                    audio["\xa9wrt"] = [c_str]
+            if "producers" in fields and fields["producers"] is not None:
+                prods = fields["producers"]
+                p_str = ", ".join(prods) if isinstance(prods, list) else str(prods).strip()
+                if p_str:
+                    audio["----:com.apple.iTunes:PRODUCER"] = [p_str.encode("utf-8")]
+            if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
+                audio["\xa9lyr"] = [str(fields["lyrics_unsynced"]).strip()]
+
+            if cover_bytes:
+                cov_fmt = (
+                    MP4Cover.FORMAT_PNG
+                    if cover_bytes.startswith(b"\x89PNG")
+                    else MP4Cover.FORMAT_JPEG
+                )
+                audio["covr"] = [MP4Cover(cover_bytes, imageformat=cov_fmt)]
+
+            audio.save()
+            return True
+
+    except Exception as e:
+        logger.warning(f"Failed to write tags to {path.name}: {e}")
+        return False
+
+    return False
+
+
+# =====================================================================
 # UNIFIED FILE TAGGER (MP3, FLAC, OPUS, M4A)
 # =====================================================================
 

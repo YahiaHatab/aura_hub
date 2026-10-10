@@ -458,6 +458,15 @@ class NavidromeClient:
             }
         return res
 
+    def scan_path(self, path: Optional[Any] = None) -> Dict[str, Any]:
+        """Triggers a library rescan in Navidrome."""
+        return self.start_scan()
+
 
 # Global singleton instance initialized from config
 navidrome_client = NavidromeClient()
+
+
+def scan_path(path: Optional[Any] = None) -> Dict[str, Any]:
+    """Module-level helper to trigger a Navidrome library scan."""
+    return navidrome_client.start_scan()

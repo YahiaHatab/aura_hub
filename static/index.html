@@ -967,6 +967,225 @@
       cursor: pointer;
     }
 
+    /* Metadata Studio Styles */
+    .studio-modal-box {
+      max-width: 580px;
+      max-height: 88vh;
+      overflow-y: auto;
+      padding: 22px 20px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
+    .studio-modal-box::-webkit-scrollbar {
+      width: 5px;
+    }
+    .studio-modal-box::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+    }
+
+    .modal-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 380px;
+    }
+
+    .studio-suggestions-section {
+      margin-bottom: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-subcard);
+      padding: 12px;
+    }
+
+    .studio-section-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 8px;
+    }
+
+    .studio-pill-bar {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 2px 0 6px;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .studio-pill-bar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .studio-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 12px;
+      border-radius: var(--radius-pill);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--pill-bg);
+      border: 1px solid var(--pill-border);
+      color: #ffffff;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }
+
+    .studio-pill:active {
+      transform: scale(0.96);
+    }
+
+    .studio-pill.selected {
+      background: #ffffff;
+      color: #000000;
+      border-color: #ffffff;
+      box-shadow: 0 2px 10px rgba(255, 255, 255, 0.2);
+    }
+
+    .studio-autofill-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      padding: 8px 12px;
+      border-radius: var(--radius-thumb);
+      margin-top: 8px;
+      gap: 10px;
+    }
+
+    .studio-tabs-row {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 14px;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 4px;
+      border-radius: var(--radius-pill);
+    }
+
+    .studio-tab-btn {
+      flex: 1;
+      padding: 7px 8px;
+      border-radius: var(--radius-pill);
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-align: center;
+    }
+
+    .studio-tab-btn.active {
+      background: #ffffff;
+      color: #000000;
+      font-weight: 700;
+    }
+
+    .studio-subtab-content {
+      display: none;
+    }
+    .studio-subtab-content.active {
+      display: block;
+    }
+
+    .form-row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .form-row-4 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+      gap: 8px;
+    }
+
+    @media (max-width: 480px) {
+      .form-row-4 {
+        grid-template-columns: 1fr 1fr;
+      }
+      .studio-cover-panel {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+
+    .studio-cover-panel {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 6px 0;
+    }
+
+    .studio-cover-preview-wrapper {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .studio-cover-img {
+      width: 110px;
+      height: 110px;
+      border-radius: var(--radius-thumb);
+      object-fit: cover;
+      border: 1px solid var(--card-border);
+      background: #111;
+      display: block;
+    }
+
+    .studio-cover-mode-tag {
+      position: absolute;
+      bottom: 6px;
+      left: 6px;
+      right: 6px;
+      font-size: 9px;
+      font-weight: 600;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      padding: 2px 4px;
+      border-radius: 4px;
+      color: #ffffff;
+    }
+
+    .studio-cover-actions {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .studio-lyrics-textarea {
+      font-family: 'SF Mono', Consolas, Monaco, monospace;
+      font-size: 11px;
+      resize: vertical;
+      line-height: 1.45;
+      min-height: 130px;
+      white-space: pre;
+    }
+
+    .studio-footer-row {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid var(--card-border);
+    }
+
     /* Toast */
     .toast-container {
       position: fixed;
@@ -1733,6 +1952,174 @@
     </div>
   </div>
 
+  <!-- Metadata Studio Modal (Mp3tag-style manual editor & external autofill) -->
+  <div class="modal-overlay" id="metadataStudioModal">
+    <div class="modal-box studio-modal-box">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" style="display: flex; align-items: center; gap: 8px;">
+            <span>🏷️</span> Metadata Studio
+          </div>
+          <div class="modal-subtitle" id="studioTargetLabel">Inspect & edit library metadata</div>
+        </div>
+        <button class="close-btn" id="btnCloseStudioModal">&times;</button>
+      </div>
+
+      <!-- Top Suggestion Bar -->
+      <div class="studio-suggestions-section">
+        <div class="studio-section-label">
+          <span>⚡ External Match Candidates</span>
+          <span id="studioSuggestionCount" style="color: var(--text-dim); font-size: 11px;"></span>
+        </div>
+        <div class="studio-pill-bar" id="studioSuggestionPillBar">
+          <div style="font-size: 11px; color: var(--text-dim); padding: 4px 0;">
+            Searching MusicBrainz, Deezer, Spotify, iTunes, and LRCLIB...
+          </div>
+        </div>
+        <div class="studio-autofill-banner" id="studioAutofillBanner" style="display: none;">
+          <div style="min-width: 0; flex: 1;">
+            <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Selected Source</div>
+            <div style="font-size: 12px; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="studioSelectedSourceText">--</div>
+          </div>
+          <button type="button" class="btn btn-solid-white btn-sm" id="btnAutofillFields">
+            <span>✨</span> Autofill Form
+          </button>
+        </div>
+      </div>
+
+      <!-- Studio Editor Form -->
+      <form id="studioForm" onsubmit="return false;">
+        <!-- Studio Tabs -->
+        <div class="studio-tabs-row">
+          <button type="button" class="studio-tab-btn active" data-studiotab="studioTabBasic">Basic</button>
+          <button type="button" class="studio-tab-btn" data-studiotab="studioTabCredits">Credits</button>
+          <button type="button" class="studio-tab-btn" data-studiotab="studioTabCover">Artwork</button>
+          <button type="button" class="studio-tab-btn" data-studiotab="studioTabLyrics">Lyrics (.lrc)</button>
+        </div>
+
+        <!-- TAB 1: BASIC TAGS -->
+        <div class="studio-subtab-content active" id="studioTabBasic">
+          <div class="form-group">
+            <label class="form-label" for="studioTitle">Title / Track Name</label>
+            <input type="text" id="studioTitle" class="form-input" placeholder="Track or album title" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="studioArtist">Artist</label>
+            <input type="text" id="studioArtist" class="form-input" placeholder="Lead artist name" autocomplete="off">
+          </div>
+          <div class="form-row-2">
+            <div class="form-group">
+              <label class="form-label" for="studioAlbum">Album</label>
+              <input type="text" id="studioAlbum" class="form-input" placeholder="Album name" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="studioAlbumArtist">Album Artist</label>
+              <input type="text" id="studioAlbumArtist" class="form-input" placeholder="Album artist (optional)" autocomplete="off">
+            </div>
+          </div>
+          <div class="form-row-4">
+            <div class="form-group">
+              <label class="form-label" for="studioTrackNum">Track #</label>
+              <input type="number" id="studioTrackNum" class="form-input" min="1" placeholder="1">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="studioTrackTotal">Total</label>
+              <input type="number" id="studioTrackTotal" class="form-input" min="1" placeholder="1">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="studioDiscNum">Disc #</label>
+              <input type="number" id="studioDiscNum" class="form-input" min="1" placeholder="1">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="studioDiscTotal">Total</label>
+              <input type="number" id="studioDiscTotal" class="form-input" min="1" placeholder="1">
+            </div>
+          </div>
+          <div class="form-row-2">
+            <div class="form-group">
+              <label class="form-label" for="studioYear">Year / Date</label>
+              <input type="text" id="studioYear" class="form-input" placeholder="e.g. 2024">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="studioGenre">Genre</label>
+              <input type="text" id="studioGenre" class="form-input" placeholder="e.g. Arabic Pop, R&B">
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: EXTENDED CREDITS -->
+        <div class="studio-subtab-content" id="studioTabCredits">
+          <div class="form-group">
+            <label class="form-label" for="studioComposers">Composers (comma-separated)</label>
+            <input type="text" id="studioComposers" class="form-input" placeholder="e.g. Mohamed Rahim, Amr Mostafa">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="studioProducers">Producers (comma-separated)</label>
+            <input type="text" id="studioProducers" class="form-input" placeholder="e.g. Tareq Madkour, Hassan El Shafei">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="studioArrangers">Arrangers (comma-separated)</label>
+            <input type="text" id="studioArrangers" class="form-input" placeholder="e.g. Adel Hakki, Tom Elmhirst">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="studioLyricists">Lyricists / Authors (comma-separated)</label>
+            <input type="text" id="studioLyricists" class="form-input" placeholder="e.g. Ayman Bahgat Amar, Bahaa El Din">
+          </div>
+        </div>
+
+        <!-- TAB 3: COVER ART -->
+        <div class="studio-subtab-content" id="studioTabCover">
+          <div class="studio-cover-panel">
+            <div class="studio-cover-preview-wrapper">
+              <img id="studioCoverImg" class="studio-cover-img" alt="Artwork Preview" src="" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 100 100\\'><rect width=\\'100\\' height=\\'100\\' fill=\\'%23121318\\'/><circle cx=\\'50\\' cy=\\'50\\' r=\\'32\\' fill=\\'%231a1b22\\' stroke=\\'rgba(255,255,255,0.1)\\' stroke-width=\\'2\\'/><circle cx=\\'50\\' cy=\\'50\\' r=\\'10\\' fill=\\'%232a2b36\\'/><circle cx=\\'50\\' cy=\\'50\\' r=\\'3\\' fill=\\'%23ffffff\\'/></svg>';">
+              <div class="studio-cover-mode-tag" id="studioCoverModeTag">Existing Artwork</div>
+            </div>
+            <div class="studio-cover-actions">
+              <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 8px;">
+                Choose which artwork will be written and embedded:
+              </div>
+              <button type="button" class="btn btn-translucent btn-full btn-sm" id="btnKeepCover" style="margin-bottom: 6px;">
+                <span>🔒</span> Keep Existing Artwork
+              </button>
+              <button type="button" class="btn btn-translucent btn-full btn-sm" id="btnUseSourceCover" style="margin-bottom: 6px;" disabled>
+                <span>🌐</span> Use Source Cover
+              </button>
+              <button type="button" class="btn btn-translucent btn-full btn-sm" id="btnUploadCover">
+                <span>📁</span> Upload Custom Image
+              </button>
+              <input type="file" id="studioCoverFileInput" accept="image/jpeg,image/png,image/webp" style="display: none;">
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 4: LYRICS EDITOR -->
+        <div class="studio-subtab-content" id="studioTabLyrics">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <label class="form-label" style="margin-bottom: 0;">Synced LRC / Timestamped Lyrics</label>
+            <button type="button" class="btn btn-translucent btn-sm" id="btnStudioFetchLrc">
+              <span>🎤</span> Fetch from LRCLIB
+            </button>
+          </div>
+          <textarea id="studioLyrics" class="form-input studio-lyrics-textarea" placeholder="[00:12.34] Lyrics line here...&#10;[00:15.67] Second line..." rows="8"></textarea>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+            Timestamped LRC lyrics are automatically written to companion .lrc files and embedded into ID3/Vorbis tags.
+          </div>
+        </div>
+
+        <!-- Modal Footer Actions -->
+        <div class="studio-footer-row">
+          <button type="button" class="btn btn-translucent" id="btnCancelStudio">
+            Cancel
+          </button>
+          <button type="button" class="btn btn-solid-white" id="btnSaveStudioTags">
+            <span>💾</span> Save & Commit Tags
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
   <!-- Bottom Navigation Bar (Screenshot 1 Style) -->
   <nav class="bottom-nav" id="bottomNav">
     <button class="nav-item active" data-tab="tabNowPlaying">
@@ -2083,6 +2470,11 @@
               </div>
               <div class="task-status-col">
                 <span class="badge-status ${statusClass}">${statusLabel}</span>
+                ${t.status === 'completed' ? `
+                  <button class="btn btn-translucent btn-sm" style="padding: 2px 7px; font-size: 10px; margin-top: 5px; gap: 3px;" onclick="openMetadataStudioForTask('${encodeURIComponent(t.title || primaryTitle)}', '${encodeURIComponent(t.artist || '')}')">
+                    <span>🏷️</span> Retag
+                  </button>
+                ` : ''}
               </div>
             </div>
           `;
@@ -2288,7 +2680,7 @@
 
         const adminActions = currentUser.is_admin ? `
           <div class="album-poster-actions">
-            <button class="btn btn-solid-white btn-sm" style="flex:1; padding: 4px 6px; font-size: 10px;" onclick="openTaggerForAlbum('${a.folder.replace(/'/g, "\\'")}')">
+            <button class="btn btn-solid-white btn-sm" style="flex:1; padding: 4px 6px; font-size: 10px;" onclick="openMetadataStudio('${a.folder.replace(/'/g, "\\'")}')">
               🏷️ Retag
             </button>
             <button class="btn btn-translucent btn-sm" style="flex:1; padding: 4px 6px; font-size: 10px;" onclick="refetchLyrics('${a.folder.replace(/'/g, "\\'")}')">
@@ -2905,6 +3297,349 @@
         submitBtn.disabled = false;
         submitBtn.textContent = 'Create Account';
       }
+    });
+
+    // ===================================================
+    // METADATA STUDIO CONTROLLER & EVENT HANDLERS
+    // ===================================================
+    let studioCurrentPath = '';
+    let studioCandidates = [];
+    let studioSelectedCandidateIdx = -1;
+    let studioInitialTags = null;
+    let studioCoverMode = 'keep'; // 'keep' | 'source' | 'custom'
+    let studioCustomCoverBase64 = null;
+    let studioSourceCoverUrl = null;
+
+    function openMetadataStudio(path) {
+      if (!path) return;
+      haptic('impact', 'medium');
+      studioCurrentPath = path;
+      studioSelectedCandidateIdx = -1;
+      studioCandidates = [];
+      studioCoverMode = 'keep';
+      studioCustomCoverBase64 = null;
+      studioSourceCoverUrl = null;
+
+      const modal = document.getElementById('metadataStudioModal');
+      modal.classList.add('open');
+      document.getElementById('studioTargetLabel').textContent = path;
+      document.getElementById('studioForm').reset();
+      switchStudioSubtab('studioTabBasic');
+
+      // Reset cover preview with current image from backend
+      const currentCoverUrl = `${getApiUrl('api/tags/cover')}?path=${encodeURIComponent(path)}&t=${Date.now()}`;
+      document.getElementById('studioCoverImg').src = currentCoverUrl;
+      document.getElementById('studioCoverModeTag').textContent = 'Existing Artwork';
+      document.getElementById('btnUseSourceCover').disabled = true;
+
+      inspectAndMatchStudio(path);
+    }
+
+    function openMetadataStudioForTask(encodedPathOrTitle, encodedArtist) {
+      const pathOrTitle = decodeURIComponent(encodedPathOrTitle);
+      const artist = decodeURIComponent(encodedArtist || '');
+      const matched = cachedAlbums.find(a =>
+        a.folder === pathOrTitle ||
+        a.album.toLowerCase() === pathOrTitle.toLowerCase() ||
+        (artist && a.artist.toLowerCase().includes(artist.toLowerCase()) && a.album.toLowerCase().includes(pathOrTitle.toLowerCase()))
+      );
+      if (matched) {
+        openMetadataStudio(matched.folder);
+      } else if (pathOrTitle) {
+        openMetadataStudio(pathOrTitle);
+      } else {
+        showToast('Target path not found for retagging.', 'warning');
+      }
+    }
+
+    async function inspectAndMatchStudio(path) {
+      const pillBar = document.getElementById('studioSuggestionPillBar');
+      pillBar.innerHTML = `<div style="font-size: 11px; color: var(--text-dim); padding: 4px 0;"><span class="spinner" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> Inspecting tags & searching providers...</div>`;
+      document.getElementById('studioAutofillBanner').style.display = 'none';
+      document.getElementById('studioSuggestionCount').textContent = '';
+
+      try {
+        const inspRes = await apiRequest(`api/tags/inspect?path=${encodeURIComponent(path)}`);
+        if (inspRes.ok && inspRes.tags) {
+          studioInitialTags = inspRes.tags;
+          populateStudioForm(inspRes.tags, false);
+
+          const qTitle = inspRes.tags.title || inspRes.tags.album || path.split(/[\/\\]/).pop();
+          const qArtist = inspRes.tags.artist || inspRes.tags.album_artist || '';
+          const qType = inspRes.type || (inspRes.tags.is_dir ? 'album' : 'track');
+
+          const matchUrl = `api/metadata/match?query=${encodeURIComponent(qTitle)}&artist=${encodeURIComponent(qArtist)}&type=${encodeURIComponent(qType)}`;
+          const matchRes = await apiRequest(matchUrl);
+          if (matchRes.ok && matchRes.candidates) {
+            studioCandidates = matchRes.candidates;
+            renderStudioSuggestions(studioCandidates);
+          }
+        }
+      } catch (err) {
+        pillBar.innerHTML = `<div style="color: var(--danger); font-size: 11px;">Inspection failed: ${err.message}</div>`;
+      }
+    }
+
+    function renderStudioSuggestions(candidates) {
+      const pillBar = document.getElementById('studioSuggestionPillBar');
+      const countLabel = document.getElementById('studioSuggestionCount');
+      if (!candidates || candidates.length === 0) {
+        pillBar.innerHTML = `<div style="font-size: 11px; color: var(--text-dim);">No external candidates matched. You can manually edit tags below.</div>`;
+        countLabel.textContent = '(0 found)';
+        return;
+      }
+
+      countLabel.textContent = `(${candidates.length} sources)`;
+      let html = '';
+      candidates.forEach((cand, idx) => {
+        const source = cand.source || 'Unknown';
+        const icon = getProviderIcon(source);
+        const conf = Math.round(cand.confidence_score || 0);
+        const isRec = cand.is_recommended || cand.recommended;
+        const recStar = isRec ? '⭐️ ' : '';
+        html += `
+          <div class="studio-pill ${isRec ? 'selected' : ''}" id="studioPill_${idx}" onclick="selectStudioCandidate(${idx})">
+            <span>${recStar}${icon}</span>
+            <span>${source}</span>
+            <span style="opacity: 0.8; font-size: 10px;">(${conf}%)</span>
+          </div>
+        `;
+      });
+      pillBar.innerHTML = html;
+
+      const recIdx = candidates.findIndex(c => c.is_recommended || c.recommended);
+      selectStudioCandidate(recIdx !== -1 ? recIdx : 0);
+    }
+
+    function selectStudioCandidate(idx) {
+      if (idx < 0 || idx >= studioCandidates.length) return;
+      haptic('impact', 'light');
+      studioSelectedCandidateIdx = idx;
+
+      document.querySelectorAll('.studio-pill').forEach((pill, i) => {
+        pill.classList.toggle('selected', i === idx);
+      });
+
+      const cand = studioCandidates[idx];
+      const p = cand.preview || {};
+      const f = cand.fields || {};
+      const banner = document.getElementById('studioAutofillBanner');
+      banner.style.display = 'flex';
+      document.getElementById('studioSelectedSourceText').textContent =
+        `${cand.source} — ${f.artist || p.artist || ''} - ${f.title || f.album || p.title || p.album || ''} (${Math.round(cand.confidence_score || 0)}%)`;
+
+      const coverUrl = f.cover_url || p.cover_thumbnail || (cand.album_data?.cover_url || cand.track_data?.cover_url);
+      const btnSourceCover = document.getElementById('btnUseSourceCover');
+      if (coverUrl) {
+        studioSourceCoverUrl = coverUrl;
+        btnSourceCover.disabled = false;
+      } else {
+        studioSourceCoverUrl = null;
+        btnSourceCover.disabled = true;
+      }
+    }
+
+    function autofillFromSelectedSource() {
+      if (studioSelectedCandidateIdx < 0 || !studioCandidates[studioSelectedCandidateIdx]) return;
+      haptic('impact', 'medium');
+      const cand = studioCandidates[studioSelectedCandidateIdx];
+      const f = cand.fields || {};
+      populateStudioForm(f, true);
+
+      if (f.cover_url || studioSourceCoverUrl) {
+        const cUrl = f.cover_url || studioSourceCoverUrl;
+        studioCoverMode = 'source';
+        studioSourceCoverUrl = cUrl;
+        document.getElementById('studioCoverImg').src = cUrl;
+        document.getElementById('studioCoverModeTag').textContent = 'Source Cover (Online)';
+      }
+
+      showToast(`Autofilled fields from ${cand.source}! Adjust as needed before saving.`, 'info');
+    }
+
+    function populateStudioForm(fields, isAutofill = false) {
+      if (!fields) return;
+      if (fields.title !== undefined) document.getElementById('studioTitle').value = fields.title || '';
+      if (fields.artist !== undefined) document.getElementById('studioArtist').value = fields.artist || '';
+      if (fields.album !== undefined) document.getElementById('studioAlbum').value = fields.album || '';
+      if (fields.album_artist !== undefined) document.getElementById('studioAlbumArtist').value = fields.album_artist || '';
+      if (fields.track_number !== undefined) document.getElementById('studioTrackNum').value = fields.track_number || 1;
+      if (fields.total_tracks !== undefined) document.getElementById('studioTrackTotal').value = fields.total_tracks || 1;
+      if (fields.disc_number !== undefined) document.getElementById('studioDiscNum').value = fields.disc_number || 1;
+      if (fields.total_discs !== undefined) document.getElementById('studioDiscTotal').value = fields.total_discs || 1;
+      if (fields.year !== undefined || fields.date !== undefined) document.getElementById('studioYear').value = fields.year || fields.date || '';
+      if (fields.genre !== undefined) document.getElementById('studioGenre').value = fields.genre || '';
+
+      const comps = fields.composers;
+      if (comps !== undefined) document.getElementById('studioComposers').value = Array.isArray(comps) ? comps.join(', ') : comps || '';
+      const prods = fields.producers;
+      if (prods !== undefined) document.getElementById('studioProducers').value = Array.isArray(prods) ? prods.join(', ') : prods || '';
+      const arrs = fields.arrangers;
+      if (arrs !== undefined) document.getElementById('studioArrangers').value = Array.isArray(arrs) ? arrs.join(', ') : arrs || '';
+      const lyrs = fields.lyricists;
+      if (lyrs !== undefined) document.getElementById('studioLyricists').value = Array.isArray(lyrs) ? lyrs.join(', ') : lyrs || '';
+
+      if (fields.lyrics_synced !== undefined || fields.lyrics_unsynced !== undefined) {
+        document.getElementById('studioLyrics').value = fields.lyrics_synced || fields.lyrics_unsynced || '';
+      }
+    }
+
+    function switchStudioSubtab(tabId) {
+      document.querySelectorAll('.studio-tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-studiotab') === tabId);
+      });
+      document.querySelectorAll('.studio-subtab-content').forEach(content => {
+        content.classList.toggle('active', content.id === tabId);
+      });
+    }
+
+    async function studioFetchLrcFromLrclib() {
+      const title = document.getElementById('studioTitle').value.trim();
+      const artist = document.getElementById('studioArtist').value.trim();
+      if (!title) {
+        showToast('Please enter a track title first.', 'warning');
+        return;
+      }
+      haptic('impact', 'medium');
+      const btn = document.getElementById('btnStudioFetchLrc');
+      const origText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:4px;"></span> Fetching...`;
+
+      try {
+        const res = await apiRequest(`api/lyrics/fetch?track=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`);
+        if (res.ok && (res.lyrics_synced || res.lyrics_unsynced)) {
+          document.getElementById('studioLyrics').value = res.lyrics_synced || res.lyrics_unsynced;
+          haptic('notification', 'success');
+          showToast('Lyrics fetched from LRCLIB!', 'success');
+        } else {
+          showToast('No lyrics found on LRCLIB.', 'warning');
+        }
+      } catch (err) {
+        showToast(`Failed: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origText;
+      }
+    }
+
+    async function commitStudioTags() {
+      if (!studioCurrentPath) {
+        showToast('No file/folder selected.', 'error');
+        return;
+      }
+
+      haptic('impact', 'heavy');
+      const btn = document.getElementById('btnSaveStudioTags');
+      const origText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> Saving...`;
+
+      showToast('⚡ Writing tags & rescanning library...', 'warning');
+
+      try {
+        const fields = {
+          title: document.getElementById('studioTitle').value.trim(),
+          artist: document.getElementById('studioArtist').value.trim(),
+          album: document.getElementById('studioAlbum').value.trim(),
+          album_artist: document.getElementById('studioAlbumArtist').value.trim(),
+          track_number: parseInt(document.getElementById('studioTrackNum').value) || 1,
+          total_tracks: parseInt(document.getElementById('studioTrackTotal').value) || 1,
+          disc_number: parseInt(document.getElementById('studioDiscNum').value) || 1,
+          total_discs: parseInt(document.getElementById('studioDiscTotal').value) || 1,
+          year: document.getElementById('studioYear').value.trim(),
+          genre: document.getElementById('studioGenre').value.trim(),
+          composers: document.getElementById('studioComposers').value.split(',').map(s => s.trim()).filter(Boolean),
+          producers: document.getElementById('studioProducers').value.split(',').map(s => s.trim()).filter(Boolean),
+          arrangers: document.getElementById('studioArrangers').value.split(',').map(s => s.trim()).filter(Boolean),
+          lyricists: document.getElementById('studioLyricists').value.split(',').map(s => s.trim()).filter(Boolean),
+        };
+
+        const lyricsVal = document.getElementById('studioLyrics').value.trim();
+        const payload = {
+          path: studioCurrentPath,
+          fields: fields,
+          lyrics_lrc: lyricsVal || null,
+          rescan: true,
+        };
+
+        if (studioCoverMode === 'custom' && studioCustomCoverBase64) {
+          payload.cover_data_base64 = studioCustomCoverBase64;
+        } else if (studioCoverMode === 'source' && studioSourceCoverUrl) {
+          payload.cover_url = studioSourceCoverUrl;
+        }
+
+        const res = await apiRequest('api/tags/commit', 'POST', payload);
+        if (res.ok) {
+          haptic('notification', 'success');
+          showToast(`✅ ${res.message || 'Tags saved successfully!'}`, 'success');
+          document.getElementById('metadataStudioModal').classList.remove('open');
+          fetchLibrary();
+        } else {
+          showToast(res.detail || res.message || 'Failed to save tags.', 'error');
+        }
+      } catch (err) {
+        showToast(`Save failed: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origText;
+      }
+    }
+
+    // Modal Control & Event Listeners
+    document.getElementById('btnCloseStudioModal')?.addEventListener('click', () => {
+      document.getElementById('metadataStudioModal').classList.remove('open');
+    });
+    document.getElementById('btnCancelStudio')?.addEventListener('click', () => {
+      document.getElementById('metadataStudioModal').classList.remove('open');
+    });
+    document.getElementById('btnAutofillFields')?.addEventListener('click', autofillFromSelectedSource);
+    document.getElementById('btnStudioFetchLrc')?.addEventListener('click', studioFetchLrcFromLrclib);
+    document.getElementById('btnSaveStudioTags')?.addEventListener('click', commitStudioTags);
+
+    document.querySelectorAll('.studio-tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        haptic('impact', 'light');
+        switchStudioSubtab(btn.getAttribute('data-studiotab'));
+      });
+    });
+
+    // Artwork button listeners
+    document.getElementById('btnKeepCover')?.addEventListener('click', () => {
+      haptic('impact', 'light');
+      studioCoverMode = 'keep';
+      const currentCoverUrl = `${getApiUrl('api/tags/cover')}?path=${encodeURIComponent(studioCurrentPath)}&t=${Date.now()}`;
+      document.getElementById('studioCoverImg').src = currentCoverUrl;
+      document.getElementById('studioCoverModeTag').textContent = 'Existing Artwork';
+      showToast('Preserving current artwork on save.', 'info');
+    });
+
+    document.getElementById('btnUseSourceCover')?.addEventListener('click', () => {
+      if (!studioSourceCoverUrl) return;
+      haptic('impact', 'light');
+      studioCoverMode = 'source';
+      document.getElementById('studioCoverImg').src = studioSourceCoverUrl;
+      document.getElementById('studioCoverModeTag').textContent = 'Source Cover (Online)';
+      showToast('Will apply candidate source cover on save.', 'info');
+    });
+
+    document.getElementById('btnUploadCover')?.addEventListener('click', () => {
+      haptic('impact', 'light');
+      document.getElementById('studioCoverFileInput').click();
+    });
+
+    document.getElementById('studioCoverFileInput')?.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        studioCustomCoverBase64 = evt.target.result;
+        studioCoverMode = 'custom';
+        document.getElementById('studioCoverImg').src = studioCustomCoverBase64;
+        document.getElementById('studioCoverModeTag').textContent = 'Custom Uploaded Image';
+        showToast('Custom cover loaded.', 'success');
+      };
+      reader.readAsDataURL(file);
     });
 
     // Initialize application

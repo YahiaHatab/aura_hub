@@ -6,6 +6,7 @@ and auditing library metadata.
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -40,9 +41,12 @@ from services.library_browser import (
 from services.metadata import (
     UnifiedAlbumMetadata,
     UnifiedTrackMetadata,
+    fetch_lrclib_lyrics_async,
     search_album_metadata_candidates_async,
+    search_metadata_async,
     search_track_metadata_candidates_async,
 )
+import services.navidrome
 from services.navidrome import navidrome_client
 from services.requests import (
     clear_completed_requests,
@@ -54,7 +58,10 @@ from services.system import get_album_folders, get_disk_metrics, get_system_diag
 from services.tagger import (
     apply_unified_metadata_to_album,
     apply_unified_metadata_to_file,
+    extract_cover_bytes,
+    read_tags,
     write_loose_cover,
+    write_tags,
 )
 from services.tasks import get_all_tasks, start_download_task
 
@@ -257,6 +264,16 @@ class ApplyMetadataPayload(BaseModel):
     album_data: Optional[Dict[str, Any]] = None
     track_data: Optional[Dict[str, Any]] = None
     rescan: Optional[bool] = True
+
+
+class CommitTagsPayload(BaseModel):
+    path: str = Field(..., min_length=1)
+    fields: Dict[str, Any] = Field(default_factory=dict)
+    lyrics_lrc: Optional[str] = None
+    cover_data_base64: Optional[str] = None
+    cover_url: Optional[str] = None
+    rescan: Optional[bool] = True
+
 
 
 def resolve_safe_path(rel_or_abs_path: str) -> Path:
@@ -896,6 +913,151 @@ async def apply_metadata_api(
             "message": f"Successfully tagged {target.name}",
             "summary": track_meta.to_dict(),
         }
+
+
+# =====================================================================
+# UNIFIED METADATA STUDIO ENDPOINTS
+# =====================================================================
+
+@api_router.get("/tags/inspect")
+async def inspect_tags_api(
+    path: str,
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Returns current file or folder audio tags, lyrics, and artwork metadata as JSON."""
+    target = resolve_safe_path(path)
+    loop = asyncio.get_running_loop()
+    tags = await loop.run_in_executor(None, lambda: read_tags(target))
+    return {
+        "ok": True,
+        "path": str(target.relative_to(config.BASE_DOWNLOAD_DIR)),
+        "type": "album" if target.is_dir() else "track",
+        "tags": tags,
+    }
+
+
+@api_router.get("/tags/cover")
+async def get_tags_cover_api(
+    path: str,
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Streams current embedded artwork from audio file or folder cover art."""
+    target = resolve_safe_path(path)
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, lambda: extract_cover_bytes(target))
+    if res:
+        cover_bytes, mime = res
+        return Response(content=cover_bytes, media_type=mime)
+    return Response(content=DEFAULT_PLACEHOLDER_SVG, media_type="image/svg+xml")
+
+
+@api_router.get("/metadata/match")
+async def match_metadata_api(
+    query: str,
+    type: str = "album",
+    artist: str = "",
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Fetches provider suggestions (MusicBrainz, Deezer, Spotify, iTunes, LRCLIB) with confidence scores."""
+    clean_q = query.strip()
+    clean_art = artist.strip()
+    if not clean_q:
+        raise HTTPException(status_code=400, detail="Missing required query parameter.")
+
+    candidates = await search_metadata_async(
+        query=clean_q,
+        type=type.lower(),
+        artist=clean_art,
+    )
+
+    return {
+        "ok": True,
+        "query": clean_q,
+        "artist": clean_art,
+        "type": type.lower(),
+        "count": len(candidates),
+        "candidates": candidates,
+    }
+
+
+@api_router.get("/lyrics/fetch")
+async def fetch_lyrics_api(
+    track: str,
+    artist: str = "",
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Quickly fetches synced and plain lyrics from LRCLIB for the Metadata Studio lyrics editor."""
+    if not track.strip():
+        raise HTTPException(status_code=400, detail="Missing required track parameter.")
+    res = await fetch_lrclib_lyrics_async(track.strip(), artist.strip())
+    return {
+        "ok": True,
+        "track": track.strip(),
+        "artist": artist.strip(),
+        "lyrics_synced": res.get("synced", ""),
+        "lyrics_unsynced": res.get("plain", ""),
+    }
+
+
+@api_router.post("/tags/commit")
+async def commit_tags_api(
+    payload: CommitTagsPayload,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Accepts edited fields, raw LRC lyrics string, and optional new cover image upload.
+
+    Writes tags cleanly using Mutagen, writes external .lrc if provided, and triggers
+    services.navidrome.scan_path() to rescan the directory.
+    """
+    target = resolve_safe_path(payload.path)
+    loop = asyncio.get_running_loop()
+
+    cover_bytes: Optional[bytes] = None
+    if payload.cover_data_base64:
+        raw_b64 = payload.cover_data_base64.strip()
+        if "," in raw_b64 and "base64" in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        try:
+            cover_bytes = base64.b64decode(raw_b64)
+        except Exception as e:
+            logger.warning(f"Failed to decode base64 cover: {e}")
+    elif payload.cover_url:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(payload.cover_url)
+                if resp.status_code == 200:
+                    cover_bytes = resp.content
+        except Exception as e:
+            logger.warning(f"Failed to fetch cover from URL {payload.cover_url}: {e}")
+
+    fields = dict(payload.fields)
+    if payload.lyrics_lrc is not None:
+        fields["lyrics_synced"] = payload.lyrics_lrc
+
+    success = await loop.run_in_executor(
+        None, lambda: write_tags(target, fields, cover_bytes=cover_bytes)
+    )
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to write tags to target audio file/folder.")
+
+    if payload.rescan:
+        async def _trigger_rescan():
+            try:
+                await loop.run_in_executor(None, lambda: services.navidrome.scan_path(target))
+            except Exception as e:
+                logger.warning(f"Background rescan failed: {e}")
+        asyncio.create_task(_trigger_rescan())
+
+    updated_tags = await loop.run_in_executor(None, lambda: read_tags(target))
+
+    return {
+        "ok": True,
+        "message": f"Successfully updated tags for {target.name}",
+        "path": str(target.relative_to(config.BASE_DOWNLOAD_DIR)),
+        "updated_tags": updated_tags,
+    }
+
 
 
 # Mount API routes under both /api and /hub/api to support reverse proxy subpaths

@@ -183,7 +183,7 @@ def get_library_albums() -> List[Dict[str, Any]]:
         if not folder_path.is_dir():
             continue
 
-        parts = rel_path.split("/")
+        parts = Path(rel_path).parts
         if len(parts) >= 2:
             artist = parts[0]
             album = parts[1]

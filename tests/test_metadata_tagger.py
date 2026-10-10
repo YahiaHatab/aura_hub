@@ -23,14 +23,19 @@ from services.metadata import (
     calculate_string_similarity,
     compute_confidence_score,
     compute_metadata_completeness,
+    fetch_lrclib_lyrics_async,
     rank_and_recommend_candidates,
     search_album_metadata_candidates,
+    search_metadata,
     search_track_metadata_candidates,
 )
 from services.tagger import (
     apply_unified_metadata_to_album,
     apply_unified_metadata_to_file,
+    extract_cover_bytes,
+    read_tags,
     write_loose_cover,
+    write_tags,
 )
 
 
@@ -468,6 +473,105 @@ class TestUnifiedTaggerEngine(unittest.TestCase):
             self.assertTrue(lrc_file.exists())
             self.assertEqual(lrc_file.read_text(encoding="utf-8"), "[00:00.00] Synced line")
 
+    def test_granular_read_and_write_tags_single_file(self):
+        """Tests read_tags, granular write_tags, and extract_cover_bytes on audio files."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            file_path = Path(tmp_dir) / "01 - Test Song.mp3"
+            file_path.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\x00" * 100)
+
+            # 1. Initial write with initial tags
+            initial_fields = {
+                "title": "Original Title",
+                "artist": "Original Artist",
+                "album": "Original Album",
+                "genre": "Acoustic",
+                "track_number": 1,
+                "total_tracks": 10,
+            }
+            ok = write_tags(file_path, initial_fields)
+            self.assertTrue(ok)
+
+            # 2. Inspect tags using read_tags
+            tags = read_tags(file_path)
+            self.assertEqual(tags["title"], "Original Title")
+            self.assertEqual(tags["artist"], "Original Artist")
+            self.assertEqual(tags["album"], "Original Album")
+            self.assertEqual(tags["track_number"], 1)
+
+            # 3. Update ONLY producer, genre, and synced lyrics (leaving title & artist untouched)
+            update_fields = {
+                "genre": "EDM",
+                "producers": ["Master Producer"],
+                "lyrics_synced": "[00:01.00] Hook line",
+            }
+            ok_update = write_tags(file_path, update_fields, cover_bytes=b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 20)
+            self.assertTrue(ok_update)
+
+            # 4. Re-read tags and verify precision:
+            updated = read_tags(file_path)
+            # Unedited tags remain intact
+            self.assertEqual(updated["title"], "Original Title")
+            self.assertEqual(updated["artist"], "Original Artist")
+            self.assertEqual(updated["album"], "Original Album")
+            # Updated tags are reflected
+            self.assertEqual(updated["genre"], "EDM")
+            self.assertEqual(updated["producers"], ["Master Producer"])
+            self.assertEqual(updated["lyrics_synced"], "[00:01.00] Hook line")
+            self.assertTrue(updated["has_cover"])
+            self.assertTrue(updated["has_lrc"])
+
+            # 5. Verify extract_cover_bytes returns artwork
+            cover_data = extract_cover_bytes(file_path)
+            self.assertIsNotNone(cover_data)
+            self.assertTrue(cover_data[0].startswith(b"\xff\xd8"))
+
+    def test_search_metadata_function(self):
+        """Tests search_metadata returns ranked candidates with confidence and autofill fields."""
+        mock_candidates = [
+            MetadataCandidate(
+                source="MusicBrainz",
+                confidence_score=94.5,
+                is_recommended=True,
+                track_data=UnifiedTrackMetadata(
+                    title="Tamally Maak",
+                    artist="Amr Diab",
+                    album="Tamally Maak",
+                    year="2000",
+                    genre="Arabic Pop",
+                    producers=["Tarek Madkour"],
+                    composers=["Sherif Tag"],
+                ),
+                preview={
+                    "title": "Tamally Maak",
+                    "artist": "Amr Diab",
+                    "album": "Tamally Maak",
+                    "year": "2000",
+                    "genres": "Arabic Pop",
+                    "has_cover": False,
+                    "has_producers": True,
+                    "has_composers": True,
+                    "has_lyrics": False,
+                    "confidence_percent": 95,
+                },
+            )
+        ]
+
+        with patch("services.metadata.search_track_metadata_candidates_async", AsyncMock(return_value=mock_candidates)):
+            with patch("services.metadata.fetch_lrclib_lyrics_async", AsyncMock(return_value={"synced": "[00:05.00] Tamally maak", "plain": "Tamally maak"})):
+                results = search_metadata("Tamally Maak", type="track", artist="Amr Diab")
+
+        self.assertIsInstance(results, list)
+        self.assertGreater(len(results), 0)
+        top = results[0]
+        self.assertEqual(top["source"], "MusicBrainz")
+        self.assertTrue(top["is_recommended"])
+        self.assertIn("fields", top)
+        self.assertEqual(top["fields"]["title"], "Tamally Maak")
+        self.assertEqual(top["fields"]["artist"], "Amr Diab")
+        self.assertEqual(top["fields"]["producers"], "Tarek Madkour")
+        self.assertEqual(top["fields"]["lyrics_synced"], "[00:05.00] Tamally maak")
+
 
 if __name__ == "__main__":
     unittest.main()
+

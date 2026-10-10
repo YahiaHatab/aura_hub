@@ -1,5 +1,6 @@
 """Unit tests for FastAPI WebApp endpoints, HMAC security, and Navidrome dashboard API."""
 
+import base64
 import hashlib
 import hmac
 import json
@@ -497,7 +498,101 @@ class TestWebAppAndSecurity(unittest.TestCase):
                     self.assertTrue(data["ok"])
                     self.assertIn("Successfully applied", data["message"])
 
+    def test_tags_inspect_and_cover_endpoints(self):
+        """Tests GET /api/tags/inspect and GET /api/tags/cover."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            song_file = tmp_path / "Artist" / "Album" / "track.mp3"
+            song_file.parent.mkdir(parents=True)
+            song_file.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\x00" * 100)
+
+            mock_tags = {
+                "title": "Track Name",
+                "artist": "Artist Name",
+                "album": "Album Name",
+                "track_number": 1,
+                "has_cover": True,
+            }
+
+            with patch("config.BASE_DOWNLOAD_DIR", tmp_path):
+                with patch("services.web.read_tags", return_value=mock_tags):
+                    res = self.client.get("/api/tags/inspect?path=Artist/Album/track.mp3", headers=self.regular_headers)
+                    self.assertEqual(res.status_code, 200)
+                    data = res.json()
+                    self.assertTrue(data["ok"])
+                    self.assertEqual(data["tags"]["title"], "Track Name")
+
+                # Test /api/tags/cover
+                with patch("services.web.extract_cover_bytes", return_value=(b"\xff\xd8\xff\xe0JFIF", "image/jpeg")):
+                    res_cov = self.client.get("/api/tags/cover?path=Artist/Album/track.mp3", headers=self.regular_headers)
+                    self.assertEqual(res_cov.status_code, 200)
+                    self.assertEqual(res_cov.headers["content-type"], "image/jpeg")
+                    self.assertEqual(res_cov.content, b"\xff\xd8\xff\xe0JFIF")
+
+    def test_metadata_match_and_lyrics_fetch_endpoints(self):
+        """Tests GET /api/metadata/match and GET /api/lyrics/fetch."""
+        mock_candidates = [
+            {
+                "source": "MusicBrainz",
+                "confidence_score": 95.0,
+                "is_recommended": True,
+                "fields": {"title": "Matched Track", "artist": "Matched Artist"},
+            }
+        ]
+
+        with patch("services.web.search_metadata_async", return_value=mock_candidates):
+            res = self.client.get("/api/metadata/match?query=Matched+Track&type=track", headers=self.regular_headers)
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(len(data["candidates"]), 1)
+            self.assertEqual(data["candidates"][0]["source"], "MusicBrainz")
+
+        with patch("services.web.fetch_lrclib_lyrics_async", return_value={"synced": "[00:10.00] Synced line", "plain": "Plain line"}):
+            res_lrc = self.client.get("/api/lyrics/fetch?track=Matched+Track&artist=Matched+Artist", headers=self.regular_headers)
+            self.assertEqual(res_lrc.status_code, 200)
+            data_lrc = res_lrc.json()
+            self.assertTrue(data_lrc["ok"])
+            self.assertEqual(data_lrc["lyrics_synced"], "[00:10.00] Synced line")
+
+    def test_tags_commit_endpoint(self):
+        """Tests POST /api/tags/commit with authentication checks, tag writing, and rescan."""
+        payload = {
+            "path": "Artist/Album/track.mp3",
+            "fields": {
+                "title": "New Title",
+                "genre": "New Genre",
+                "producers": ["Producer X"],
+            },
+            "lyrics_lrc": "[00:01.00] New LRC line",
+            "cover_data_base64": "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff\xe0JFIF").decode("ascii"),
+            "rescan": True,
+        }
+
+        # Non-admin -> 403 Forbidden
+        res_user = self.client.post("/api/tags/commit", json=payload, headers=self.regular_headers)
+        self.assertEqual(res_user.status_code, 403)
+
+        # Admin user
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            target_f = tmp_path / "Artist" / "Album" / "track.mp3"
+            target_f.parent.mkdir(parents=True)
+            target_f.write_bytes(b"dummy")
+
+            with patch("config.BASE_DOWNLOAD_DIR", tmp_path):
+                with patch("services.web.write_tags", return_value=True) as mock_write:
+                    with patch("services.web.read_tags", return_value={"title": "New Title", "genre": "New Genre"}):
+                        with patch("services.navidrome.scan_path", return_value={"ok": True}):
+                            res_admin = self.client.post("/api/tags/commit", json=payload, headers=self.admin_headers)
+                            self.assertEqual(res_admin.status_code, 200)
+                            data = res_admin.json()
+                            self.assertTrue(data["ok"])
+                            self.assertIn("Successfully updated", data["message"])
+                            mock_write.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
