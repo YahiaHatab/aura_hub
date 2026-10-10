@@ -124,6 +124,73 @@ class TestHandlersAndApplication(unittest.TestCase):
         self.assertIn("dlmeta_skip:test_sess_1", empty_callbacks)
         self.assertIn("dlmeta_cancel:test_sess_1", empty_callbacks)
 
+    def test_post_download_ingest_keyboards(self):
+        from services.metadata import MetadataCandidate, UnifiedAlbumMetadata
+        from utils.keyboards import (
+            build_ingest_card_keyboard,
+            build_ingest_fallback_keyboard,
+            build_ingest_sources_keyboard,
+        )
+
+        cand1 = MetadataCandidate(
+            source="Spotify",
+            confidence_score=95.0,
+            is_recommended=True,
+            badge_label="Spotify",
+            album_data=UnifiedAlbumMetadata(album="Saharna", artist="Amr Diab", year="2020"),
+            preview={"title": "Saharna", "year": "2020", "has_cover": True, "has_lyrics": True},
+        )
+        cand2 = MetadataCandidate(
+            source="Deezer",
+            confidence_score=88.0,
+            is_recommended=False,
+            badge_label="Deezer",
+            album_data=UnifiedAlbumMetadata(album="Saharna", artist="Amr Diab", year="2020"),
+            preview={"title": "Saharna", "year": "2020", "has_cover": True, "has_lyrics": False},
+        )
+
+        # 1. Ingest card keyboard
+        markup = build_ingest_card_keyboard(
+            session_id="test_ing_1",
+            staging_rel_path=".staging/dl_test_ing_1",
+            cand_idx=0,
+            alt_count=2,
+        )
+        callbacks = [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+        urls = [btn.url for row in markup.inline_keyboard for btn in row if btn.url]
+
+        self.assertIn("ingest:apply:test_ing_1:0", callbacks)
+        self.assertIn("ingest:sources:test_ing_1", callbacks)
+        self.assertIn("ingest:skip:test_ing_1", callbacks)
+        self.assertTrue(any("https://h-navidrome.duckdns.org/studio?path=" in u for u in urls))
+        self.assertTrue(any(".staging%2Fdl_test_ing_1" in u for u in urls))
+
+        # Ensure no WebAppInfo is used
+        for row in markup.inline_keyboard:
+            for btn in row:
+                self.assertIsNone(btn.web_app)
+
+        # 2. Alternative sources submenu keyboard
+        sources_markup = build_ingest_sources_keyboard(
+            session_id="test_ing_1",
+            candidates=[cand1, cand2],
+            active_idx=0,
+        )
+        source_callbacks = [btn.callback_data for row in sources_markup.inline_keyboard for btn in row if btn.callback_data]
+        self.assertIn("ingest:select:test_ing_1:0", source_callbacks)
+        self.assertIn("ingest:select:test_ing_1:1", source_callbacks)
+        self.assertIn("ingest:back:test_ing_1", source_callbacks)
+
+        # 3. Fallback keyboard
+        fallback_markup = build_ingest_fallback_keyboard(
+            session_id="test_ing_1",
+            staging_rel_path=".staging/dl_test_ing_1",
+        )
+        fb_callbacks = [btn.callback_data for row in fallback_markup.inline_keyboard for btn in row if btn.callback_data]
+        fb_urls = [btn.url for row in fallback_markup.inline_keyboard for btn in row if btn.url]
+        self.assertIn("ingest:skip:test_ing_1", fb_callbacks)
+        self.assertTrue(any("https://h-navidrome.duckdns.org/studio" in u for u in fb_urls))
+
     def test_post_download_session_cancel_cleanup(self):
         import tempfile
         from pathlib import Path

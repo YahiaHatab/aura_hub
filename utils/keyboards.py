@@ -1,6 +1,7 @@
 """Dynamic inline keyboards for pagination, search results, and confirmation dialogs."""
 
 from typing import Any, Dict, List
+import urllib.parse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 import config
@@ -189,6 +190,114 @@ def build_metadata_empty_keyboard(session_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("✅ Use Probed Tags & Move", callback_data=f"dlmeta_default:{session_id}")],
         [InlineKeyboardButton("⏩ Skip Tagging & Move", callback_data=f"dlmeta_skip:{session_id}")],
         [InlineKeyboardButton("❌ Discard Download", callback_data=f"dlmeta_cancel:{session_id}")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_ingest_card_keyboard(
+    session_id: str,
+    staging_rel_path: str,
+    cand_idx: int = 0,
+    alt_count: int = 0,
+) -> InlineKeyboardMarkup:
+    """Builds interactive inline keyboard for post-download staging ingestion review.
+
+    Provides 1-tap accept & commit, alternative sources selector, skip tagging,
+    and a direct external HTTPS deep link to Desktop Web Studio.
+    """
+    studio_base = getattr(config, "STUDIO_BASE_URL", "") or "https://h-navidrome.duckdns.org/studio"
+    encoded_staging_path = urllib.parse.quote(str(staging_rel_path).replace("\\", "/"), safe="")
+    studio_url = f"{studio_base}?path={encoded_staging_path}"
+
+    alt_label = f"🔄 Alternative Sources ({alt_count})" if alt_count > 0 else "🔄 Alternative Sources"
+
+    keyboard: List[List[InlineKeyboardButton]] = [
+        # Row 1: [✅ Accept & Commit]
+        [
+            InlineKeyboardButton(
+                "✅ Accept & Commit",
+                callback_data=f"ingest:apply:{session_id}:{cand_idx}",
+            )
+        ],
+        # Row 2: [🔄 Alternative Sources ({count})] [⏭ Skip Tagging]
+        [
+            InlineKeyboardButton(
+                alt_label,
+                callback_data=f"ingest:sources:{session_id}",
+            ),
+            InlineKeyboardButton(
+                "⏭ Skip Tagging",
+                callback_data=f"ingest:skip:{session_id}",
+            ),
+        ],
+        # Row 3: Direct HTTPS deep link to standalone desktop studio
+        [
+            InlineKeyboardButton(
+                "🖥 Open in Web Studio",
+                url=studio_url,
+            )
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_ingest_sources_keyboard(
+    session_id: str,
+    candidates: List[Any],
+    active_idx: int = 0,
+) -> InlineKeyboardMarkup:
+    """Builds submenu keyboard listing alternative metadata source candidates."""
+    keyboard: List[List[InlineKeyboardButton]] = []
+
+    for idx, cand in enumerate(candidates):
+        badge = getattr(cand, "badge_label", "") or getattr(cand, "source", "Source")
+        p = getattr(cand, "preview", {}) or {}
+        title = p.get("title") or getattr(cand, "source", "Unknown")
+        year = p.get("year") or ""
+        year_str = f" ({year})" if year else ""
+
+        btn_text = f"[{badge}] {title[:24]}{year_str}"
+        if idx == active_idx:
+            btn_text = f"👉 {btn_text}"
+
+        keyboard.append([
+            InlineKeyboardButton(
+                btn_text,
+                callback_data=f"ingest:select:{session_id}:{idx}",
+            )
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(
+            "⬅️ Back",
+            callback_data=f"ingest:back:{session_id}",
+        )
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_ingest_fallback_keyboard(
+    session_id: str,
+    staging_rel_path: str,
+) -> InlineKeyboardMarkup:
+    """Builds fallback keyboard when no online metadata candidates could be resolved."""
+    studio_base = getattr(config, "STUDIO_BASE_URL", "") or "https://h-navidrome.duckdns.org/studio"
+    encoded_staging_path = urllib.parse.quote(str(staging_rel_path).replace("\\", "/"), safe="")
+    studio_url = f"{studio_base}?path={encoded_staging_path}"
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "⏭ Skip Tagging",
+                callback_data=f"ingest:skip:{session_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🖥 Open in Web Studio",
+                url=studio_url,
+            )
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 

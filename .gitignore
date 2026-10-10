@@ -23,3 +23,6 @@ htmlcov/
 data/requests.json
 data/*.tmp
 
+
+.vercel
+.env*

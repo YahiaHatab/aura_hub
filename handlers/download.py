@@ -3,6 +3,7 @@ and post-download interactive metadata source review.
 """
 
 import asyncio
+import html
 import io
 import logging
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import mutagen
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
@@ -29,6 +31,7 @@ from services.downloader import (
 )
 from services.metadata import (
     MetadataCandidate,
+    MetadataRegistry,
     search_album_metadata_candidates_async,
     search_track_metadata_candidates_async,
 )
@@ -36,6 +39,9 @@ from services.navidrome import navidrome_client
 from services.settings import get_quality_preference, parse_quality_flag
 from utils.helpers import resolve_fallback_genre
 from utils.keyboards import (
+    build_ingest_card_keyboard,
+    build_ingest_fallback_keyboard,
+    build_ingest_sources_keyboard,
     build_metadata_diff_keyboard,
     build_metadata_empty_keyboard,
     build_metadata_review_keyboard,
@@ -151,6 +157,170 @@ def _render_metadata_review_message(
     return text, markup
 
 
+def inspect_staging_audio_files(staging_dir: Path) -> Dict[str, Any]:
+    """Inspects staging directory audio files using mutagen to extract preliminary artist, album, and track title."""
+    audio_files = sorted([
+        f for f in staging_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS
+    ])
+    artist = ""
+    album = ""
+    title = ""
+    durations: List[float] = []
+
+    for f in audio_files:
+        try:
+            mut = mutagen.File(str(f))
+            if not mut:
+                continue
+            if getattr(mut, "info", None) and hasattr(mut.info, "length"):
+                durations.append(float(mut.info.length))
+            tags = getattr(mut, "tags", None)
+            if tags:
+                cand_artist = (
+                    str(tags.get("artist", [""])[0] if isinstance(tags.get("artist"), list) else tags.get("artist", ""))
+                    or str(tags.get("TPE1", [""])[0] if isinstance(tags.get("TPE1"), list) else tags.get("TPE1", ""))
+                    or ""
+                )
+                cand_album = (
+                    str(tags.get("album", [""])[0] if isinstance(tags.get("album"), list) else tags.get("album", ""))
+                    or str(tags.get("TALB", [""])[0] if isinstance(tags.get("TALB"), list) else tags.get("TALB", ""))
+                    or ""
+                )
+                cand_title = (
+                    str(tags.get("title", [""])[0] if isinstance(tags.get("title"), list) else tags.get("title", ""))
+                    or str(tags.get("TIT2", [""])[0] if isinstance(tags.get("TIT2"), list) else tags.get("TIT2", ""))
+                    or ""
+                )
+                if cand_artist and not artist:
+                    artist = cand_artist
+                if cand_album and not album:
+                    album = cand_album
+                if cand_title and not title:
+                    title = cand_title
+        except Exception:
+            pass
+
+    return {
+        "audio_files": audio_files,
+        "track_count": len(audio_files),
+        "durations": durations,
+        "artist": artist,
+        "album": album,
+        "title": title,
+    }
+
+
+def _render_ingest_card_message(
+    session: Dict[str, Any],
+    cand_idx: int = 0,
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """Renders the HTML staging ingestion card and inline keyboard."""
+    session_id: str = session["session_id"]
+    detected_album: str = session.get("detected_album", "Unknown Album")
+    detected_artist: str = session.get("detected_artist", "Unknown Artist")
+    staging_rel_path: str = session.get("staging_rel_path", "")
+    track_count: int = session.get("track_count", len(session.get("audio_files", [])))
+    candidates: List[MetadataCandidate] = session.get("candidates", [])
+
+    esc_album = html.escape(detected_album)
+    esc_artist = html.escape(detected_artist)
+    esc_staging = html.escape(staging_rel_path)
+
+    if not candidates:
+        text = (
+            f"🎵 <b>Download Complete: Ingestion Staging</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Release:</b> {esc_album} — {esc_artist}\n"
+            f"<b>Files:</b> {track_count} tracks staging in <code>{esc_staging}</code>\n\n"
+            f"⚠️ <b>No online metadata found.</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Select an action below or fine-tune in Web Studio:"
+        )
+        markup = build_ingest_fallback_keyboard(session_id, staging_rel_path)
+        return text, markup
+
+    cand_idx = max(0, min(cand_idx, len(candidates) - 1))
+    top_cand = candidates[cand_idx]
+
+    p = top_cand.preview or {}
+    has_cover = bool(
+        p.get("has_cover")
+        or (top_cand.album_data and (top_cand.album_data.cover_url or top_cand.album_data.cover_bytes))
+        or (top_cand.track_data and (top_cand.track_data.cover_url or top_cand.track_data.cover_bytes))
+    )
+    has_lyrics = bool(
+        p.get("has_lyrics")
+        or (top_cand.track_data and (top_cand.track_data.lyrics_synced or top_cand.track_data.lyrics_unsynced))
+        or (top_cand.album_data and any(t.lyrics_synced or t.lyrics_unsynced for t in getattr(top_cand.album_data, "tracks", [])))
+    )
+
+    cover_art_status = "Cover Art" if has_cover else "No Cover"
+    lyrics_status = "Synced Lyrics" if has_lyrics else "No Lyrics"
+    confidence_score = int(top_cand.confidence_score)
+
+    badge_label = html.escape(top_cand.badge_label or top_cand.source)
+    source_name = html.escape((top_cand.source or "ONLINE").upper())
+
+    text = (
+        f"🎵 <b>Download Complete: Ingestion Staging</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Release:</b> {esc_album} — {esc_artist}\n"
+        f"<b>Files:</b> {track_count} tracks staging in <code>{esc_staging}</code>\n\n"
+        f"⭐️ <b>Top Recommendation:</b>\n"
+        f"• <b>Source:</b> {badge_label} ({source_name})\n"
+        f"• <b>Confidence / Match:</b> {confidence_score}%\n"
+        f"• <b>Includes:</b> {cover_art_status} | {lyrics_status} | High-Res Tags\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Select an action below or fine-tune in Web Studio:"
+    )
+    markup = build_ingest_card_keyboard(
+        session_id=session_id,
+        staging_rel_path=staging_rel_path,
+        cand_idx=cand_idx,
+        alt_count=len(candidates),
+    )
+    return text, markup
+
+
+def _render_ingest_sources_message(
+    session: Dict[str, Any],
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """Renders the HTML alternative sources selection menu."""
+    session_id: str = session["session_id"]
+    detected_album: str = session.get("detected_album", "Unknown Album")
+    detected_artist: str = session.get("detected_artist", "Unknown Artist")
+    candidates: List[MetadataCandidate] = session.get("candidates", [])
+    active_idx: int = session.get("active_cand_idx", 0)
+
+    esc_album = html.escape(detected_album)
+    esc_artist = html.escape(detected_artist)
+
+    cand_lines = []
+    for idx, c in enumerate(candidates, 1):
+        badge = html.escape(c.badge_label or c.source)
+        source = html.escape((c.source or "").upper())
+        p = c.preview or {}
+        title = html.escape(p.get("title") or c.source)
+        year = html.escape(str(p.get("year", "")))
+        year_str = f" ({year})" if year else ""
+        conf = int(c.confidence_score)
+        mark = "👉 " if (idx - 1) == active_idx else "• "
+        cand_lines.append(f"{mark}<b>[{badge}]</b> {title}{year_str} — <i>{source}</i> ({conf}% match)")
+
+    text = (
+        f"📋 <b>Alternative Metadata Sources</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Release:</b> {esc_album} — {esc_artist}\n"
+        f"<b>Available Providers:</b> {len(candidates)} candidates found\n\n"
+        + "\n".join(cand_lines) + "\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Select a source below to preview and apply, or return back:"
+    )
+    markup = build_ingest_sources_keyboard(session_id, candidates, active_idx=active_idx)
+    return text, markup
+
+
 async def execute_task(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -159,7 +329,7 @@ async def execute_task(
     custom_title: Optional[str] = None,
     quality: Optional[str] = None,
 ):
-    """Executes the download staging phase, queries metadata backends, and prompts user for review."""
+    """Executes the download staging phase, queries metadata providers, and prompts user with interactive card."""
     chat = update.effective_chat
     if not chat:
         return
@@ -171,15 +341,16 @@ async def execute_task(
     effective_quality = quality or get_quality_preference(user_id)
 
     status_msg = await chat.send_message(
-        f"⏳ `[1/4]` *Streaming & Extracting Audio ({effective_quality.upper()})...*",
-        parse_mode="Markdown",
+        f"⏳ <code>[1/4]</code> <b>Streaming & Extracting Audio ({html.escape(effective_quality.upper())})...</b>",
+        parse_mode="HTML",
     )
 
     loop = asyncio.get_running_loop()
 
     def sync_status_updater(text: str):
+        clean_text = text.replace("*", "").replace("`", "")
         asyncio.run_coroutine_threadsafe(
-            status_msg.edit_text(text, parse_mode="Markdown"), loop
+            status_msg.edit_text(f"⏳ <code>[1/4]</code> <b>{html.escape(clean_text)}</b>", parse_mode="HTML"), loop
         )
 
     try:
@@ -193,60 +364,69 @@ async def execute_task(
         )
 
         session_id = stage["session_id"]
-        detected_album = stage["detected_album"]
-        detected_artist = stage["detected_artist"]
+        staging_dir = stage["staging_dir"]
+
+        # Inspect downloaded audio files in staging folder using mutagen
+        stg_info = inspect_staging_audio_files(staging_dir)
+        detected_album = stg_info["album"] or stage["detected_album"]
+        detected_artist = stg_info["artist"] or stage["detected_artist"]
+        staging_rel_path = str(staging_dir.relative_to(config.BASE_DOWNLOAD_DIR)).replace("\\", "/")
 
         await status_msg.edit_text(
-            f"🔎 `[2/4]` *Querying metadata providers for:* `{detected_album}`...\n"
-            f"_(Checking iTunes, MusicBrainz, Deezer, Spotify, Discogs)_",
-            parse_mode="Markdown",
+            f"🔎 <code>[2/4]</code> <b>Querying metadata providers for:</b> <code>{html.escape(detected_album)}</code>...\n"
+            f"<i>(Checking Spotify, Deezer, MusicBrainz, iTunes, Discogs)</i>",
+            parse_mode="HTML",
         )
 
-        # Query metadata providers asynchronously
-        candidates = await search_album_metadata_candidates_async(
-            album_name=detected_album,
-            artist_name=detected_artist,
-            local_track_count=len(stage["audio_files"]),
-            local_durations=stage["durations"],
-        )
-
-        # Fallback to single track query if single track and no album candidate
-        if not candidates and stage["is_single"]:
-            candidates = await search_track_metadata_candidates_async(
-                title=detected_album,
+        # Call MetadataRegistry.aggregate_search concurrently across registered providers
+        try:
+            candidates = await MetadataRegistry.aggregate_search(
                 artist=detected_artist,
-                local_duration=stage["durations"][0] if stage["durations"] else None,
+                album=detected_album,
+                local_track_count=stg_info["track_count"],
+                local_durations=stg_info["durations"],
+                is_single=stage["is_single"],
             )
+        except Exception as me:
+            logger.warning(f"Metadata aggregate search failed: {me}")
+            candidates = []
 
         # Cache session state
-        _DOWNLOAD_SESSIONS[session_id] = {
+        session_data = {
             "session_id": session_id,
             "user_id": user_id,
             "chat_id": chat.id,
             "message_id": status_msg.message_id,
-            "staging_dir": stage["staging_dir"],
+            "staging_dir": staging_dir,
+            "staging_rel_path": staging_rel_path,
             "detected_artist": detected_artist,
             "detected_album": detected_album,
-            "audio_files": stage["audio_files"],
-            "durations": stage["durations"],
+            "audio_files": stg_info["audio_files"],
+            "durations": stg_info["durations"],
+            "track_count": stg_info["track_count"],
             "genius_raw": genius_input,
             "parsed_genius": stage.get("parsed_genius"),
             "quality": effective_quality,
             "custom_title": custom_title,
             "candidates": candidates,
+            "active_cand_idx": 0,
             "created_at": time.time(),
         }
+        _DOWNLOAD_SESSIONS[session_id] = session_data
+        if context and hasattr(context, "bot_data"):
+            context.bot_data.setdefault("ingest_sessions", {})[session_id] = session_data
 
-        review_text, review_markup = _render_metadata_review_message(
-            _DOWNLOAD_SESSIONS[session_id]
-        )
+        review_text, review_markup = _render_ingest_card_message(session_data, cand_idx=0)
         await status_msg.edit_text(
-            review_text, reply_markup=review_markup, parse_mode="Markdown"
+            review_text, reply_markup=review_markup, parse_mode="HTML"
         )
 
     except Exception as e:
         logger.exception("Download stage failed")
-        await status_msg.edit_text(f"❌ *Download Error:*\n`{e}`", parse_mode="Markdown")
+        await status_msg.edit_text(
+            f"❌ <b>Download Error:</b>\n<code>{html.escape(str(e))}</code>",
+            parse_mode="HTML",
+        )
 
 
 async def download_metadata_callback_handler(
@@ -512,6 +692,236 @@ async def _execute_finalize(
         )
 
 
+async def download_ingest_callback_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """Handles 1-tap ingestion commits, source selection submenu, skip, and back actions."""
+    query = update.callback_query
+    if not query or not query.from_user:
+        return
+
+    data = query.data or ""
+    if not data.startswith("ingest:"):
+        return
+
+    # Verify admin authorization
+    user_id = query.from_user.id
+    if user_id not in config.ADMIN_USER_IDS:
+        await query.answer("⛔ Unauthorized: Admin privileges required.", show_alert=True)
+        return
+
+    parts = data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    session_id = parts[2] if len(parts) > 2 else ""
+
+    session = (
+        (context.bot_data.get("ingest_sessions", {}).get(session_id) if context and hasattr(context, "bot_data") else None)
+        or _DOWNLOAD_SESSIONS.get(session_id)
+    )
+
+    if not session or not session.get("staging_dir") or not session["staging_dir"].exists():
+        await query.answer("⚠️ Session expired or files already imported.", show_alert=True)
+        await query.edit_message_text(
+            "⚠️ <b>This ingestion session has expired or was already processed.</b>\n"
+            "Use <code>/retag</code> or Web Studio to inspect your library.",
+            parse_mode="HTML",
+        )
+        return
+
+    candidates: List[MetadataCandidate] = session.get("candidates", [])
+
+    # 1. ingest:apply:<session_id>:<cand_idx>
+    if action == "apply":
+        await query.answer("Committing metadata & importing...")
+        cand_idx = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else session.get("active_cand_idx", 0)
+        chosen_cand = candidates[cand_idx] if candidates and cand_idx < len(candidates) else (candidates[0] if candidates else None)
+        await _execute_ingest_finalize(query, session, chosen_candidate=chosen_cand, skip_tagging=False)
+        return
+
+    # 2. ingest:skip:<session_id>
+    if action == "skip":
+        await query.answer("Importing without tag changes...")
+        await _execute_ingest_finalize(query, session, chosen_candidate=None, skip_tagging=True)
+        return
+
+    # 3. ingest:sources:<session_id>
+    if action == "sources":
+        await query.answer()
+        if not candidates:
+            await query.answer("No alternative metadata candidates found.", show_alert=True)
+            return
+        text, markup = _render_ingest_sources_message(session)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+        return
+
+    # 4. ingest:select:<session_id>:<cand_idx>
+    if action == "select":
+        cand_idx = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        session["active_cand_idx"] = cand_idx
+        chosen = candidates[cand_idx] if cand_idx < len(candidates) else candidates[0]
+        badge = chosen.badge_label or chosen.source
+        await query.answer(f"Switched to {badge}!")
+        text, markup = _render_ingest_card_message(session, cand_idx=cand_idx)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+        return
+
+    # 5. ingest:back:<session_id>
+    if action == "back":
+        await query.answer()
+        active_idx = session.get("active_cand_idx", 0)
+        text, markup = _render_ingest_card_message(session, cand_idx=active_idx)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+        return
+
+
+async def _execute_ingest_finalize(
+    query,
+    session: Dict[str, Any],
+    chosen_candidate: Optional[MetadataCandidate] = None,
+    skip_tagging: bool = False,
+):
+    """Applies candidate tags, embeds cover art & lyrics, moves files to library, and triggers Navidrome scan."""
+    session_id = session["session_id"]
+    source_name = (
+        chosen_candidate.source
+        if chosen_candidate
+        else ("Probed Tags" if not skip_tagging else "Skipped (Raw)")
+    )
+
+    action_text = (
+        f"⏳ <code>[3/4]</code> <b>Applying metadata from {html.escape(source_name)} & syncing lyrics...</b>"
+        if not skip_tagging
+        else "⏳ <code>[3/4]</code> <b>Moving audio files into active library directory...</b>"
+    )
+    await query.edit_message_text(action_text, parse_mode="HTML")
+
+    loop = asyncio.get_running_loop()
+
+    def sync_fin_updater(text: str):
+        clean_msg = text.replace("*", "").replace("`", "")
+        asyncio.run_coroutine_threadsafe(
+            query.edit_message_text(f"⏳ <code>[3/4]</code> <b>{html.escape(clean_msg)}</b>", parse_mode="HTML"), loop
+        )
+
+    chosen_meta = None
+    if chosen_candidate:
+        chosen_meta = chosen_candidate.album_data or chosen_candidate.track_data
+
+    try:
+        final_dir, meta = await loop.run_in_executor(
+            executor,
+            finalize_staged_media,
+            session["staging_dir"],
+            session["detected_artist"],
+            session["detected_album"],
+            chosen_meta,
+            skip_tagging,
+            session.get("genius_raw", ""),
+            session.get("parsed_genius"),
+            sync_fin_updater,
+        )
+
+        folder_path = Path(final_dir)
+        total_audio = len([
+            f
+            for f in folder_path.iterdir()
+            if f.is_file() and f.suffix.lower() in config.AUDIO_EXTENSIONS
+        ])
+        lrc_count = len([
+            f
+            for f in folder_path.iterdir()
+            if f.is_file() and f.suffix.lower() == ".lrc"
+        ])
+
+        flac_cnt = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".flac"])
+        opus_cnt = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".opus"])
+        m4a_cnt = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".m4a"])
+        mp3_cnt = len([f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == ".mp3"])
+
+        if flac_cnt > 0:
+            format_tag = f"{flac_cnt} FLAC (Lossless)"
+        elif opus_cnt > 0:
+            format_tag = f"{opus_cnt} Opus (Native)"
+        elif m4a_cnt > 0:
+            format_tag = f"{m4a_cnt} M4A (AAC)"
+        else:
+            format_tag = f"{mp3_cnt} MP3"
+
+        album_title = html.escape(meta.get("album", session["detected_album"]))
+        artist = html.escape(meta.get("artist", session["detected_artist"]))
+        year = f" ({meta.get('year')})" if meta.get("year") else ""
+        genre = html.escape(resolve_fallback_genre(meta.get("artist", session["detected_artist"]), meta.get("album", session["detected_album"]), meta.get("genre")))
+
+        # Subsonic Library Rescan
+        rescan_note = ""
+        if navidrome_client.is_configured():
+            scan_res = navidrome_client.start_scan()
+            if scan_res.get("ok"):
+                rescan_note = "\n🔄 <i>Navidrome library rescan initiated automatically.</i>"
+
+        if skip_tagging:
+            caption = (
+                f"⏭ <b>Imported without tag changes.</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>Release:</b> {album_title} — {artist}\n"
+                f"<b>Files:</b> {total_audio} files ({format_tag})\n"
+                f"<b>Location:</b> <code>{html.escape(folder_path.name)}</code>\n"
+                f"{rescan_note}\n\n"
+                f"✨ <i>Ready in Navidrome!</i>"
+            )
+        else:
+            caption = (
+                f"✅ <b>Successfully tagged and imported to Navidrome Library!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💿 <b>{album_title}</b>{year}\n"
+                f"👤 <b>{artist}</b>\n"
+                f"🏷️ <code>{genre}</code>\n"
+                f"🌐 <b>Source:</b> <code>{html.escape(source_name)}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"✓ <b>Tracks:</b> {total_audio} files ({format_tag})\n"
+                f"✓ <b>Synced Lyrics:</b> {lrc_count} <code>.lrc</code> files active\n"
+                f"📂 <b>Location:</b> <code>{html.escape(folder_path.name)}</code>\n"
+                f"{rescan_note}\n\n"
+                f"✨ <b>Ready in Symfonium & Navidrome!</b>"
+            )
+
+        cover_bytes = meta.get("cover_bytes")
+        if not cover_bytes and chosen_meta and getattr(chosen_meta, "cover_bytes", None):
+            cover_bytes = chosen_meta.cover_bytes
+
+        if not cover_bytes:
+            loose_cov = folder_path / "cover.jpg"
+            if loose_cov.is_file():
+                try:
+                    cover_bytes = loose_cov.read_bytes()
+                except Exception:
+                    pass
+
+        # Cleanup sessions
+        _DOWNLOAD_SESSIONS.pop(session_id, None)
+
+        if cover_bytes:
+            try:
+                await query.delete_message()
+                await query.message.chat.send_photo(
+                    photo=io.BytesIO(cover_bytes),
+                    caption=caption,
+                    parse_mode="HTML",
+                )
+                return
+            except Exception as pe:
+                logger.warning(f"Could not send photo card: {pe}")
+
+        await query.edit_message_text(caption, parse_mode="HTML")
+
+    except Exception as e:
+        logger.exception("Finalizing download failed")
+        await query.edit_message_text(
+            f"❌ <b>Error applying metadata:</b>\n<code>{html.escape(str(e))}</code>",
+            parse_mode="HTML",
+        )
+
+
 @auth_required
 async def auto_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Automatically triggers download for admins or queues an ingestion request for standard users."""
@@ -678,6 +1088,7 @@ router = [
     CommandHandler("genius", genius_handler),
     CommandHandler("search", search_handler),
     CallbackQueryHandler(search_callback_handler, pattern=r"^yt_dl:"),
+    CallbackQueryHandler(download_ingest_callback_handler, pattern=r"^ingest:"),
     CallbackQueryHandler(download_metadata_callback_handler, pattern=r"^dlmeta_"),
     MessageHandler(
         filters.TEXT

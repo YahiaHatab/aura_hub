@@ -246,6 +246,59 @@ def get_library_albums() -> List[Dict[str, Any]]:
             if has_lyrics:
                 lyrics_status = "unsynced_only"
 
+        folder_mtime = int(folder_path.stat().st_mtime) if folder_path.exists() else 0
+        year = ""
+        release_type = ""
+
+        # Try to read release_type and year from first audio file
+        if audio_files:
+            first_audio = audio_files[0]
+            f_ext = first_audio.suffix.lower()
+            if f_ext == ".mp3":
+                try:
+                    from mutagen.id3 import ID3
+                    id3_tags = ID3(str(first_audio))
+                    for txxx in id3_tags.getall("TXXX"):
+                        if txxx.desc.upper() in ("RELEASETYPE", "RELEASE TYPE", "MUSICBRAINZ_ALBUMTYPE"):
+                            release_type = str(txxx.text[0]).strip()
+                            break
+                    if "TDRC" in id3_tags and id3_tags["TDRC"].text:
+                        year = str(id3_tags["TDRC"].text[0])[:4]
+                except Exception:
+                    pass
+            elif f_ext in (".opus", ".flac"):
+                try:
+                    import mutagen
+                    mut = mutagen.File(str(first_audio))
+                    if mut and getattr(mut, "tags", None):
+                        rt = mut.tags.get("releasetype") or mut.tags.get("musicbrainz_albumtype")
+                        if rt:
+                            release_type = rt[0] if isinstance(rt, list) else str(rt)
+                        dt = mut.tags.get("date") or mut.tags.get("year")
+                        if dt:
+                            year = str(dt[0] if isinstance(dt, list) else dt)[:4]
+                except Exception:
+                    pass
+            elif f_ext == ".m4a":
+                try:
+                    from mutagen.mp4 import MP4
+                    mp = MP4(str(first_audio))
+                    rt = mp.get("----:com.apple.iTunes:RELEASETYPE")
+                    if rt:
+                        release_type = rt[0].decode("utf-8", errors="ignore").strip()
+                    dy = mp.get("\xa9day")
+                    if dy:
+                        year = str(dy[0])[:4]
+                except Exception:
+                    pass
+
+        if not release_type:
+            if track_count <= 3:
+                release_type = "Single"
+            elif track_count <= 6:
+                release_type = "EP"
+            else:
+                release_type = "Album"
 
         results.append(
             {
@@ -256,6 +309,9 @@ def get_library_albums() -> List[Dict[str, Any]]:
                 "lrc_count": lrc_count,
                 "has_cover": has_cover,
                 "lyrics_status": lyrics_status,
+                "release_type": release_type,
+                "mtime": folder_mtime,
+                "year": year,
             }
         )
 

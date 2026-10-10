@@ -33,7 +33,7 @@
         <button class="nav-view-btn" id="btnNavDownloader" data-view="downloader" title="Direct Downloader & Ingestion Queue">
           <span>📥</span> Downloader & Queue
         </button>
-        <button class="nav-view-btn" id="btnNavLibrary" data-view="library" title="Library Artist Tree & Album Browser">
+        <button class="nav-view-btn" id="btnNavLibrary" data-view="library" title="Library Album Grid">
           <span>📚</span> Library
         </button>
       </nav>
@@ -130,9 +130,18 @@
               <input type="text" class="form-input" id="albumFieldYear" placeholder="YYYY">
             </div>
             <div class="form-group">
-              <label class="form-label">Genre</label>
-              <input type="text" class="form-input" id="albumFieldGenre" placeholder="Genre">
+              <label class="form-label">Release Type</label>
+              <select class="form-input" id="albumFieldReleaseType">
+                <option value="Album">Album</option>
+                <option value="EP">EP</option>
+                <option value="Single">Single</option>
+              </select>
             </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Genre</label>
+            <input type="text" class="form-input" id="albumFieldGenre" placeholder="Genre">
           </div>
 
           <div class="form-group">
@@ -316,10 +325,8 @@
             <p style="font-size:13px; color:var(--text-muted); margin-top:2px;">Paste Spotify (tracks/albums/playlists), Deezer, Tidal, Qobuz, or YouTube Music URLs</p>
           </div>
           <div class="downloader-quality-pills">
-            <button class="quality-pill active" data-quality="auto">Auto (Lossless)</button>
-            <button class="quality-pill" data-quality="flac">FLAC</button>
-            <button class="quality-pill" data-quality="opus">Opus</button>
-            <button class="quality-pill" data-quality="mp3">MP3</button>
+            <button class="quality-pill active" data-quality="best">Best Available</button>
+            <button class="quality-pill" data-quality="mp3">320 kbps MP3</button>
           </div>
         </div>
 
@@ -389,19 +396,54 @@
 
   <!-- ================= VIEW 3: EXPANDED LIBRARY BROWSER ================= -->
   <div class="app-view" id="viewLibrary">
-    <div class="library-view-container library-modal library-modal-content" id="library-modal">
+    <div class="library-view-container" id="libraryViewContainer">
       
-      <!-- Library Top Filter Bar -->
+      <!-- Library Top Header Bar -->
       <div class="library-header-bar">
         <div>
           <h2 style="font-family:var(--font-display); font-size:20px; font-weight:700;">Navidrome Music Library</h2>
           <span style="font-size:13px; color:var(--text-muted);" id="libraryStatsSummary">Loading indexed albums...</span>
         </div>
-        <input type="text" class="form-input library-search-input" id="libViewFilterInput" placeholder="Filter by artist name or album title...">
       </div>
 
-      <!-- Collapsible Artist Tree Container -->
-      <div class="artist-tree-container library-tree-container library-albums-container library-list" id="artistTreeContainer">
+      <!-- Sticky Library Toolbar -->
+      <div class="library-sticky-toolbar">
+        <div class="library-toolbar-left">
+          <div class="library-search-wrapper">
+            <input type="text" class="form-input library-search-input" id="library-search-input" placeholder="Search title or artist...">
+          </div>
+          <div class="filter-pills-group" id="libraryTypeFilters">
+            <button class="filter-pill active" data-filter="all">All</button>
+            <button class="filter-pill" data-filter="album">Albums</button>
+            <button class="filter-pill" data-filter="ep">EPs</button>
+            <button class="filter-pill" data-filter="single">Singles</button>
+          </div>
+        </div>
+
+        <div class="library-toolbar-right">
+          <div class="sort-select-wrapper">
+            <label for="librarySortSelect" class="toolbar-label">Sort:</label>
+            <select class="form-input toolbar-select" id="librarySortSelect">
+              <option value="recent">Recently Added / Modified</option>
+              <option value="title_asc">Alphabetical (A - Z)</option>
+              <option value="artist_asc">Artist Name (A - Z)</option>
+              <option value="year_desc">Year (Newest First)</option>
+            </select>
+          </div>
+
+          <div class="view-mode-toggle" id="libraryViewModeToggle">
+            <button class="btn btn-secondary mode-btn active" data-mode="flat" title="Flat Grid View">
+              <span>🗂</span> Flat Grid
+            </button>
+            <button class="btn btn-secondary mode-btn" data-mode="artist" title="Group by Artist">
+              <span>👥</span> Group by Artist
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Albums Container (Flat Grid or Artist Grouping) -->
+      <div class="library-albums-container library-list" id="library-list">
         <!-- Rendered dynamically -->
       </div>
 
@@ -479,7 +521,12 @@
 
   <!-- Toast Container -->
   <div id="toastContainer"></div>
-
+  <!-- Main Metadata Studio Script -->
+  <script src="js/studio.js"></script>
+</body>
+</html>
+ainer -->
+  <div id="toastContainer"></div>
   <!-- Main Metadata Studio Script -->
   <script src="js/studio.js"></script>
 </body>

@@ -79,6 +79,7 @@ class UnifiedTrackMetadata:
     lyrics_synced: str = ""
     duration_seconds: float = 0.0
     isrc: str = ""
+    release_type: str = "Single"
     cover_url: str = ""
     cover_bytes: Optional[bytes] = None
     source: str = ""
@@ -103,6 +104,7 @@ class UnifiedAlbumMetadata:
     album: str = ""
     artist: str = ""
     album_artist: str = ""
+    release_type: str = "Album"
     year: str = ""
     genre: str = ""
     genres: List[str] = field(default_factory=list)
@@ -155,28 +157,28 @@ class MetadataCandidate:
             src_lower = (self.source or "").lower()
             if src_lower == "spotify":
                 self.brand_color = self.brand_color or "#1DB954"
-                self.badge_label = self.badge_label or "Spotify"
+                self.badge_label = self.badge_label or "SPOTIFY"
             elif src_lower == "deezer":
                 self.brand_color = self.brand_color or "#A238FF"
-                self.badge_label = self.badge_label or "Deezer"
+                self.badge_label = self.badge_label or "DEEZER"
             elif src_lower in ("musicbrainz", "mb"):
                 self.brand_color = self.brand_color or "#EB743B"
-                self.badge_label = self.badge_label or "MusicBrainz"
+                self.badge_label = self.badge_label or "MUSICBRAINZ"
             elif src_lower == "discogs":
                 self.brand_color = self.brand_color or "#333333"
-                self.badge_label = self.badge_label or "Discogs"
+                self.badge_label = self.badge_label or "DISCOGS"
             elif src_lower == "genius":
                 self.brand_color = self.brand_color or "#FFFF64"
-                self.badge_label = self.badge_label or "Genius"
+                self.badge_label = self.badge_label or "GENIUS"
             elif src_lower == "lrclib":
                 self.brand_color = self.brand_color or "#10B981"
                 self.badge_label = self.badge_label or "LRCLIB"
             elif src_lower in ("itunes", "apple", "apple music"):
                 self.brand_color = self.brand_color or "#FA243C"
-                self.badge_label = self.badge_label or "Apple Music"
+                self.badge_label = self.badge_label or "ITUNES"
             else:
                 self.brand_color = self.brand_color or "#38BDF8"
-                self.badge_label = self.badge_label or (self.source or "Local")
+                self.badge_label = self.badge_label or (self.source or "Local").upper()
 
         if self.preview is not None:
             if "brand_color" not in self.preview:
@@ -517,10 +519,21 @@ def fetch_full_mb_release(
         if not genre_list and effective_genre:
             genre_list = [effective_genre]
 
+        rel_group = full_data.get("release-group") or {}
+        primary_type = (rel_group.get("primary-type") or "").strip()
+        if not primary_type:
+            if len(tracks) <= 3:
+                primary_type = "Single"
+            elif len(tracks) <= 6:
+                primary_type = "EP"
+            else:
+                primary_type = "Album"
+
         return {
             "mbid": rel_id,
             "title": full_data.get("title", fallback_title),
             "artist": artist_credit or fallback_artist,
+            "release_type": primary_type,
             "date": full_data.get("date", ""),
             "genre": effective_genre,
             "genres": genre_list,
@@ -759,13 +772,60 @@ class MetadataRegistry:
         """Retrieves a provider by source name (case-insensitive)."""
         return cls._providers.get((name or "").strip().lower())
 
+    @classmethod
+    async def aggregate_search(
+        cls,
+        artist: str = "",
+        album: str = "",
+        local_track_count: Optional[int] = None,
+        local_durations: Optional[List[float]] = None,
+        is_single: bool = False,
+        timeout: Optional[float] = None,
+    ) -> List["MetadataCandidate"]:
+        """Asynchronously searches all registered providers concurrently for album or track metadata candidates.
+
+        Queries registered providers, computes fuzzy confidence and completeness scores,
+        and returns ranked candidates with is_recommended set.
+        """
+        clean_artist = (artist or "").strip()
+        clean_album = (album or "").strip()
+
+        # If explicitly single track or no album title given, prioritize track candidates
+        if is_single or (not clean_album and clean_artist):
+            track_query = clean_album or clean_artist
+            cand_tracks = await search_track_metadata_candidates_async(
+                title=track_query,
+                artist=clean_artist if clean_album else "",
+                local_duration=local_durations[0] if local_durations else None,
+            )
+            if cand_tracks:
+                return cand_tracks
+
+        # Query album metadata across all providers
+        cand_albums = await search_album_metadata_candidates_async(
+            album_name=clean_album or clean_artist,
+            artist_name=clean_artist if clean_album else "",
+            local_track_count=local_track_count,
+            local_durations=local_durations,
+        )
+
+        # Fallback to single track search if album search returned no results
+        if not cand_albums and (clean_album or clean_artist):
+            cand_albums = await search_track_metadata_candidates_async(
+                title=clean_album or clean_artist,
+                artist=clean_artist if clean_album else "",
+                local_duration=local_durations[0] if local_durations else None,
+            )
+
+        return cand_albums
+
 
 @MetadataRegistry.register
 class MusicBrainzProvider(BaseMetadataProvider):
     """Provider wrapper for MusicBrainz REST API & Cover Art Archive."""
     source_name: str = "MusicBrainz"
     brand_color: str = "#EB743B"
-    badge_label: str = "MusicBrainz"
+    badge_label: str = "MUSICBRAINZ"
 
     @classmethod
     async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
@@ -806,6 +866,7 @@ class MusicBrainzProvider(BaseMetadataProvider):
                 album=mb_data.get("title", album),
                 artist=mb_data.get("artist", artist),
                 album_artist=mb_data.get("artist", artist),
+                release_type=mb_data.get("release_type", "Album"),
                 year=str(mb_data.get("date", "")),
                 genre=mb_data.get("genre", ""),
                 genres=mb_data.get("genres", []),
@@ -851,7 +912,7 @@ class DeezerProvider(BaseMetadataProvider):
     """Provider wrapper for public Deezer REST API."""
     source_name: str = "Deezer"
     brand_color: str = "#A238FF"
-    badge_label: str = "Deezer"
+    badge_label: str = "DEEZER"
 
     @classmethod
     async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
@@ -927,12 +988,23 @@ class DeezerProvider(BaseMetadataProvider):
                             )
                         )
 
+                    rec_type = (detail.get("record_type") or "").lower()
+                    if rec_type == "single":
+                        dz_rel_type = "Single"
+                    elif rec_type == "ep":
+                        dz_rel_type = "EP"
+                    elif rec_type in ("album", "compile"):
+                        dz_rel_type = "Album"
+                    else:
+                        dz_rel_type = "Single" if len(tracks) <= 3 else ("EP" if len(tracks) <= 6 else "Album")
+
                     cover_url = detail.get("cover_xl") or detail.get("cover_big") or ""
                     results.append(
                         UnifiedAlbumMetadata(
                             album=detail.get("title", album),
                             artist=detail.get("artist", {}).get("name", artist),
                             album_artist=detail.get("artist", {}).get("name", artist),
+                            release_type=dz_rel_type,
                             year=str(detail.get("release_date", "")),
                             genre=dz_genre,
                             genres=[dz_genre] if dz_genre else genre_list,
@@ -991,7 +1063,7 @@ class ITunesProvider(BaseMetadataProvider):
     """Provider wrapper for public iTunes Search API."""
     source_name: str = "iTunes"
     brand_color: str = "#FA243C"
-    badge_label: str = "Apple Music"
+    badge_label: str = "ITUNES"
 
     @classmethod
     async def search_album(cls, album: str, artist: str = "") -> List[UnifiedAlbumMetadata]:
@@ -1055,11 +1127,14 @@ class ITunesProvider(BaseMetadataProvider):
                             )
                         )
 
+                    it_rel_type = "Single" if len(tracks) <= 3 else ("EP" if len(tracks) <= 6 else "Album")
+
                     results.append(
                         UnifiedAlbumMetadata(
                             album=item.get("collectionName", album),
                             artist=item.get("artistName", artist),
                             album_artist=item.get("artistName", artist),
+                            release_type=it_rel_type,
                             year=str(item.get("releaseDate", ""))[:10],
                             genre=itunes_genre,
                             genres=[itunes_genre] if itunes_genre else [],
@@ -1122,7 +1197,7 @@ class SpotifyProvider(BaseMetadataProvider):
     """Provider wrapper for Spotify Web API via client credentials flow."""
     source_name: str = "Spotify"
     brand_color: str = "#1DB954"
-    badge_label: str = "Spotify"
+    badge_label: str = "SPOTIFY"
 
     _access_token: Optional[str] = None
     _token_expiry: float = 0.0
@@ -1214,10 +1289,19 @@ class SpotifyProvider(BaseMetadataProvider):
                             )
                         )
 
+                    sp_alb_type = (detail.get("album_type") or "").lower()
+                    if sp_alb_type == "single":
+                        sp_rel_type = "Single" if len(tracks) <= 3 else "EP"
+                    elif sp_alb_type in ("album", "compilation"):
+                        sp_rel_type = "Album"
+                    else:
+                        sp_rel_type = "Single" if len(tracks) <= 3 else ("EP" if len(tracks) <= 6 else "Album")
+
                     results.append(
                         UnifiedAlbumMetadata(
                             album=detail.get("name", album),
                             artist=sp_artist,
+                            release_type=sp_rel_type,
                             year=str(detail.get("release_date", "")),
                             genres=[sp_genre] if sp_genre else detail.get("genres", []),
                             genre=sp_genre,
@@ -2009,6 +2093,7 @@ async def search_metadata_async(
                 "lyricists": ", ".join(t.lyricists) if t.lyricists else "",
                 "lyrics_synced": t.lyrics_synced,
                 "lyrics_unsynced": t.lyrics_unsynced,
+                "release_type": getattr(t, "release_type", "Single"),
                 "cover_url": t.cover_url,
             }
         elif c.album_data:
@@ -2018,6 +2103,7 @@ async def search_metadata_async(
                 "artist": a.artist,
                 "album": a.album,
                 "album_artist": a.album_artist or a.artist,
+                "release_type": getattr(a, "release_type", "Album"),
                 "track_number": 1,
                 "total_tracks": a.total_tracks or len(a.tracks) or 1,
                 "disc_number": 1,

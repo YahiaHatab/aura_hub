@@ -75,19 +75,129 @@ SUPPORTED_AUDIO_EXTENSIONS = set(config.AUDIO_EXTENSIONS)
 # =====================================================================
 
 def write_loose_cover(folder: Union[str, Path], cover_bytes: bytes) -> Optional[Path]:
-    """Saves loose cover.jpg inside an album directory for Navidrome indexing."""
+    """Saves loose cover.jpg/cover.png inside an album directory for Navidrome indexing, cleanly overwriting existing cover art."""
     if not cover_bytes:
         return None
     try:
-        folder_path = Path(folder)
-        cover_path = folder_path / "cover.jpg"
-        if not cover_path.exists() or cover_path.stat().st_size == 0:
-            cover_path.write_bytes(cover_bytes)
-        logger.info(f"Saved loose cover.jpg for Navidrome in {folder_path.name}")
+        folder_path = Path(folder).resolve()
+        if not folder_path.exists() or not folder_path.is_dir():
+            return None
+
+        mime = "image/png" if cover_bytes.startswith(b"\x89PNG") else "image/jpeg"
+        target_name = "cover.png" if "png" in mime.lower() else "cover.jpg"
+        cover_path = folder_path / target_name
+
+        # Always write / overwrite the cover file
+        cover_path.write_bytes(cover_bytes)
+
+        # Clean up conflicting stale cover files with different names or extensions
+        standard_names = ["cover.jpg", "folder.jpg", "cover.png", "album.jpg", "front.jpg", "artwork.jpg", "artwork.png"]
+        for alt_name in standard_names:
+            alt_path = folder_path / alt_name
+            if alt_path.exists():
+                try:
+                    if alt_path.resolve() != cover_path.resolve():
+                        alt_path.unlink()
+                        logger.debug(f"Removed conflicting stale cover: {alt_path.name}")
+                except Exception as del_err:
+                    logger.debug(f"Could not remove stale cover {alt_path}: {del_err}")
+
+        logger.info(f"Saved loose {target_name} for Navidrome in {folder_path.name}")
         return cover_path
     except Exception as e:
-        logger.warning(f"Failed to write loose cover.jpg: {e}")
+        logger.warning(f"Failed to write loose cover: {e}")
         return None
+
+
+def embed_and_save_cover_art(
+    album_dir: Union[str, Path],
+    image_bytes: bytes,
+    mime_type: Optional[str] = None,
+) -> Optional[Path]:
+    """
+    Overwrites both folder-level artwork and embedded tags across all audio files in the album folder.
+    Clears all pre-existing picture frames (APIC, METADATA_BLOCK_PICTURE, covr) to prevent legacy frame persistence.
+    """
+    if not image_bytes:
+        return None
+
+    folder = Path(album_dir).resolve()
+    if not folder.exists() or not folder.is_dir():
+        raise FileNotFoundError(f"Album directory not found: {folder}")
+
+    if not mime_type:
+        mime_type = "image/png" if image_bytes.startswith(b"\x89PNG") else "image/jpeg"
+
+    # 1. Overwrite folder-level artwork files & clean up stale files
+    target_cover = write_loose_cover(folder, image_bytes)
+
+    # 2. Iterate and overwrite embedded tags for every audio file in album folder
+    valid_exts = {".mp3", ".flac", ".opus", ".ogg", ".m4a", ".mp4", ".alac"}
+    for file_path in folder.iterdir():
+        if not file_path.is_file():
+            continue
+        ext = file_path.suffix.lower()
+        if ext not in valid_exts:
+            continue
+
+        try:
+            # MP3 files
+            if ext == ".mp3":
+                audio = MP3(str(file_path))
+                if audio.tags is None:
+                    audio.add_tags()
+                # Remove ALL existing APIC frames completely
+                audio.tags.delall("APIC")
+                audio.tags.add(
+                    APIC(
+                        encoding=3,          # UTF-8
+                        mime=mime_type,
+                        type=3,              # Cover (front)
+                        desc="Cover",
+                        data=image_bytes,
+                    )
+                )
+                _safe_save_mutagen(audio, file_path, v2_version=3)
+
+            # FLAC files
+            elif ext == ".flac":
+                audio = FLAC(str(file_path))
+                audio.clear_pictures()
+                pic = Picture()
+                pic.type = 3  # Cover (front)
+                pic.mime = mime_type
+                pic.desc = "Front Cover"
+                pic.data = image_bytes
+                audio.add_picture(pic)
+                _safe_save_mutagen(audio, file_path)
+
+            # M4A / MP4 files
+            elif ext in [".m4a", ".mp4", ".alac"]:
+                audio = MP4(str(file_path))
+                img_format = MP4Cover.FORMAT_PNG if "png" in mime_type.lower() else MP4Cover.FORMAT_JPEG
+                audio["covr"] = [MP4Cover(image_bytes, imageformat=img_format)]
+                _safe_save_mutagen(audio, file_path)
+
+            # OGG / OPUS files
+            elif ext in [".ogg", ".opus"]:
+                if ext == ".opus":
+                    audio = OggOpus(str(file_path))
+                else:
+                    from mutagen.oggvorbis import OggVorbis
+                    audio = OggVorbis(str(file_path))
+                pic = Picture()
+                pic.type = 3  # Cover (front)
+                pic.mime = mime_type
+                pic.desc = "Front Cover"
+                pic.data = image_bytes
+                encoded_data = base64.b64encode(pic.write()).decode("ascii")
+                audio["metadata_block_picture"] = [encoded_data]
+                _safe_save_mutagen(audio, file_path)
+
+        except Exception as e:
+            logger.warning(f"Failed to embed cover in {file_path.name}: {e}")
+
+    return target_cover
 
 
 def parse_lrc_to_sylt_data(lrc_text: str) -> List[Tuple[str, int]]:
@@ -315,6 +425,23 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
             if t.get("producers") and not producers:
                 producers = t["producers"]
 
+        track_count = len(tracks)
+        # release_type from tracks if present
+        release_type = ""
+        for t in tracks:
+            if t.get("release_type"):
+                release_type = t["release_type"]
+                break
+        if not release_type:
+            # Heuristic auto-detection when missing:
+            # 1-3 tracks: Single, 4-6 tracks: EP, 7+ tracks: Album
+            if track_count <= 3:
+                release_type = "Single"
+            elif track_count <= 6:
+                release_type = "EP"
+            else:
+                release_type = "Album"
+
         has_loose_cover = any(
             (path / c).is_file() and (path / c).stat().st_size > 0
             for c in ("cover.jpg", "cover.png", "folder.jpg", "folder.png")
@@ -327,13 +454,14 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
             "album": album_name,
             "artist": artist_name,
             "album_artist": album_artist_name or artist_name,
+            "release_type": release_type,
             "year": year,
             "genre": genre,
             "composers": composers,
             "producers": producers,
             "has_cover": has_loose_cover or any(t.get("has_cover") for t in tracks),
             "has_loose_cover": has_loose_cover,
-            "track_count": len(tracks),
+            "track_count": track_count,
             "lrc_count": sum(1 for t in tracks if t.get("has_lrc")),
             "tracks": tracks,
         }
@@ -348,6 +476,7 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
         "artist": "",
         "album_artist": "",
         "album": "",
+        "release_type": "",
         "year": "",
         "date": "",
         "track_number": 1,
@@ -421,6 +550,8 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
                         info["producers"] = [p.strip() for p in str(txxx.text[0]).split(",") if p.strip()]
                     elif d_upper == "ARRANGER":
                         info["arrangers"] = [a.strip() for a in str(txxx.text[0]).split(",") if a.strip()]
+                    elif d_upper in ("RELEASETYPE", "RELEASE TYPE", "MUSICBRAINZ_ALBUMTYPE"):
+                        info["release_type"] = str(txxx.text[0]).strip()
                 if not info["producers"]:
                     for ipls in id3.getall("IPLS"):
                         for role, person in getattr(ipls, "people", []):
@@ -463,6 +594,8 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
             if "lyricist" in fl: info["lyricists"] = list(fl["lyricist"])
             if "lyrics" in fl and fl["lyrics"]:
                 info["lyrics_unsynced"] = fl["lyrics"][0]
+            if "releasetype" in fl and fl["releasetype"]: info["release_type"] = fl["releasetype"][0]
+            elif "musicbrainz_albumtype" in fl and fl["musicbrainz_albumtype"]: info["release_type"] = fl["musicbrainz_albumtype"][0]
             if fl.pictures:
                 info["has_cover"] = True
                 info["cover_mime"] = fl.pictures[0].mime or "image/jpeg"
@@ -494,6 +627,8 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
             if "lyricist" in op: info["lyricists"] = list(op["lyricist"])
             if "lyrics" in op and op["lyrics"]:
                 info["lyrics_unsynced"] = op["lyrics"][0]
+            if "releasetype" in op and op["releasetype"]: info["release_type"] = op["releasetype"][0]
+            elif "musicbrainz_albumtype" in op and op["musicbrainz_albumtype"]: info["release_type"] = op["musicbrainz_albumtype"][0]
             mbp = op.get("metadata_block_picture")
             if mbp:
                 try:
@@ -528,6 +663,12 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
                     info["producers"] = [p.strip() for p in prod[0].decode("utf-8").split(",") if p.strip()]
                 except Exception:
                     pass
+            rt = mp.get("----:com.apple.iTunes:RELEASETYPE")
+            if rt:
+                try:
+                    info["release_type"] = rt[0].decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    pass
             if "\xa9lyr" in mp and mp["\xa9lyr"]:
                 info["lyrics_unsynced"] = mp["\xa9lyr"][0]
             if "covr" in mp and mp["covr"]:
@@ -538,6 +679,16 @@ def read_tags(file_path: Union[str, Path]) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Error parsing audio tags for {path.name}: {e}")
+
+    if not info.get("release_type"):
+        # Heuristic auto-detection when missing
+        tot = info.get("total_tracks") or 1
+        if tot <= 3:
+            info["release_type"] = "Single"
+        elif tot <= 6:
+            info["release_type"] = "EP"
+        else:
+            info["release_type"] = "Album"
 
     return info
 
@@ -559,7 +710,7 @@ def write_tags(
     # 1. Directory / Album batch operation
     if path.is_dir():
         if cover_bytes:
-            write_loose_cover(path, cover_bytes)
+            embed_and_save_cover_art(path, cover_bytes)
 
         audio_files = sorted(
             [f for f in path.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS],
@@ -739,6 +890,14 @@ def write_tags(
                 if sylt_entries:
                     audio.add(SYLT(encoding=3, lang="eng", format=1, type=1, desc="", text=sylt_entries))
 
+            if "release_type" in fields and fields["release_type"] is not None:
+                rt_val = str(fields["release_type"]).strip()
+                for frame in list(audio.getall("TXXX")):
+                    if frame.desc.upper() in ("RELEASETYPE", "RELEASE TYPE"):
+                        audio.delall(frame.HashKey)
+                if rt_val:
+                    audio.add(TXXX(encoding=3, desc="RELEASETYPE", text=rt_val))
+
             if cover_bytes:
                 audio.delall("APIC")
                 mime = "image/png" if cover_bytes.startswith(b"\x89PNG") else "image/jpeg"
@@ -790,6 +949,8 @@ def write_tags(
                 audio["lyricist"] = lyrs if isinstance(lyrs, list) else [str(lyrs).strip()]
             if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
                 audio["lyrics"] = [str(fields["lyrics_unsynced"]).strip()]
+            if "release_type" in fields and fields["release_type"] is not None:
+                audio["releasetype"] = [str(fields["release_type"]).strip()]
 
             if cover_bytes:
                 audio.clear_pictures()
@@ -842,6 +1003,8 @@ def write_tags(
                 audio["lyricist"] = lyrs if isinstance(lyrs, list) else [str(lyrs).strip()]
             if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
                 audio["lyrics"] = [str(fields["lyrics_unsynced"]).strip()]
+            if "release_type" in fields and fields["release_type"] is not None:
+                audio["releasetype"] = [str(fields["release_type"]).strip()]
 
             if cover_bytes:
                 pic = Picture()
@@ -896,6 +1059,8 @@ def write_tags(
                 a_str = ", ".join(arrs) if isinstance(arrs, list) else str(arrs).strip()
                 if a_str:
                     audio["----:com.apple.iTunes:ARRANGER"] = [a_str.encode("utf-8")]
+            if "release_type" in fields and fields["release_type"] is not None:
+                audio["----:com.apple.iTunes:RELEASETYPE"] = [str(fields["release_type"]).strip().encode("utf-8")]
             if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
                 audio["\xa9lyr"] = [str(fields["lyrics_unsynced"]).strip()]
 

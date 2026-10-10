@@ -750,15 +750,32 @@ class TestDownloaderRouting(unittest.TestCase):
                 fmt_idx = dl_cmd.index("--audio-format")
                 self.assertEqual(dl_cmd[fmt_idx + 1], "mp3")
 
-    def test_spotify_forced_flac_failure_raises(self):
+    def test_spotify_best_routes_to_spotdl(self):
         from services.downloader import run_pipeline
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            with patch("config.BASE_DOWNLOAD_DIR", Path(tmp_dir)):
-                # SpotiFLAC fails or produces no flac files
-                with self.assertRaises(RuntimeError) as ctx:
-                    run_pipeline("https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT", quality="flac")
-                self.assertIn("FLAC could not be resolved", str(ctx.exception))
+            with patch("config.BASE_DOWNLOAD_DIR", Path(tmp_dir)), \
+                 patch("services.downloader.find_spotdl_binary", return_value="/usr/bin/spotdl"), \
+                 patch("subprocess.run") as mock_subproc, \
+                 patch("services.downloader.tag_playlist_hybrid", return_value={"artist": "Various", "album": "Collection"}), \
+                 patch("services.downloader.sync_all_lrc_in_folder", return_value=1):
+
+                def fake_spotdl_run(cmd, **kwargs):
+                    if "download" in cmd:
+                        out_dir = Path(cmd[4]).parent
+                        (out_dir / "Artist - Track.opus").write_bytes(b"dummy opus")
+                    return MagicMock(returncode=0)
+
+                mock_subproc.side_effect = fake_spotdl_run
+
+                target_folder, meta = run_pipeline(
+                    "https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT", quality="best"
+                )
+
+                call_args = mock_subproc.call_args[0][0]
+                self.assertIn("--format", call_args)
+                fmt_idx = call_args.index("--format")
+                self.assertEqual(call_args[fmt_idx + 1], "opus")
 
     def test_spotify_auto_falls_back_to_opus(self):
         from services.downloader import run_pipeline

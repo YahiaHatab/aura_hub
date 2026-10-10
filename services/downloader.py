@@ -1,7 +1,7 @@
-"""Audio download pipelines for Aura Hub using SpotiFLAC, yt-dlp, and spotdl.
+"""Audio download pipelines for Aura Hub using yt-dlp and spotdl.
 
-Implements multi-tier download dispatching across lossless streaming services and YouTube,
-supporting qualities: 'auto' (FLAC -> Opus fallback), 'flac', 'opus', and 'mp3'.
+Implements multi-tier download dispatching across streaming services and YouTube,
+supporting qualities: 'best' (optimal native Opus/AAC container) and 'mp3' (standard 320k).
 """
 
 import json
@@ -87,9 +87,9 @@ def download_media_staging(
 
     Probes media titles and audio durations without applying tags or moving to active library.
     """
-    quality = (quality or "auto").lower().strip()
-    if quality not in ("auto", "flac", "opus", "mp3"):
-        quality = "auto"
+    quality = (quality or "best").lower().strip()
+    if quality not in ("best", "auto", "opus", "mp3"):
+        quality = "best"
 
     is_lossless_source = any(d in media_url.lower() for d in LOSSLESS_DOMAINS)
     parsed_genius = parse_genius_input(genius_raw)
@@ -104,7 +104,7 @@ def download_media_staging(
     detected_artist = "Unknown Artist"
     detected_album = "Unknown Album"
 
-    # ================= CASE 2: LOSSLESS STREAMING SERVICES =================
+    # ================= CASE 2: STREAMING SERVICES =================
     if is_lossless_source:
         clean_url = media_url.split("?")[0].strip()
         url_path = urllib.parse.urlsplit(clean_url).path.strip("/").split("/")
@@ -122,93 +122,36 @@ def download_media_staging(
             domain_name = "Qobuz"
 
         folder_label = f"{domain_name}_{category.title()}_{slug[:8]}"
+        audio_format = "mp3" if quality == "mp3" else "opus"
 
-        flac_resolved = False
-        if quality in ("auto", "flac"):
-            if status_updater:
-                status_updater("💎 `[1/4]` *Attempting Lossless FLAC Download via SpotiFLAC...*")
-            try:
-                from SpotiFLAC import SpotiFLAC
-
-                SpotiFLAC(
-                    url=clean_url,
-                    output_dir=staging_dir,
-                    services=["tidal", "qobuz", "deezer", "amazon"],
-                    filename_format="{track}. {title}",
-                    use_track_numbers=True,
-                )
-            except Exception as e:
-                logger.warning(f"SpotiFLAC invocation failed: {e}")
-
-            flac_files = [
-                f for f in staging_dir.iterdir()
-                if f.is_file() and f.suffix.lower() == ".flac"
-            ]
-            if flac_files:
-                flac_resolved = True
-                logger.info(f"SpotiFLAC successfully resolved {len(flac_files)} FLAC file(s).")
-            else:
-                if quality == "flac":
+        if domain_name == "Spotify":
+            spotdl_bin = find_spotdl_binary()
+            if spotdl_bin:
+                cmd = [
+                    spotdl_bin,
+                    "download",
+                    clean_url,
+                    "--output",
+                    f"{staging_dir}/{{artist}} - {{title}}.{{output-ext}}",
+                    "--format",
+                    audio_format,
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode != 0:
                     shutil.rmtree(staging_dir, ignore_errors=True)
-                    raise RuntimeError(
-                        f"Lossless FLAC could not be resolved via SpotiFLAC for {clean_url}."
-                    )
-                logger.info("SpotiFLAC did not resolve FLAC files; falling back to native Opus extraction.")
-                if status_updater:
-                    status_updater("🎧 `[1/4]` *FLAC unavailable. Falling back to native Opus...*")
-
-        if not flac_resolved:
-            fallback_format = "mp3" if quality == "mp3" else "opus"
-
-            if domain_name == "Spotify":
-                spotdl_bin = find_spotdl_binary()
-                if spotdl_bin:
-                    cmd = [
-                        spotdl_bin,
-                        "download",
-                        clean_url,
-                        "--output",
-                        f"{staging_dir}/{{artist}} - {{title}}.{{output-ext}}",
-                        "--format",
-                        fallback_format,
-                    ]
-                    res = subprocess.run(cmd, capture_output=True, text=True)
-                    if res.returncode != 0:
-                        shutil.rmtree(staging_dir, ignore_errors=True)
-                        raise RuntimeError(f"spotdl failed:\n{res.stderr or res.stdout}")
-                else:
-                    if not shutil.which("yt-dlp"):
-                        shutil.rmtree(staging_dir, ignore_errors=True)
-                        raise RuntimeError(
-                            "spotdl binary was not found and yt-dlp is unavailable. "
-                            "Please install spotdl (`pip install spotdl`) or yt-dlp."
-                        )
-                    cmd = [
-                        "yt-dlp",
-                        "-x",
-                        "--audio-format",
-                        fallback_format,
-                        "--audio-quality",
-                        "0",
-                        "--embed-thumbnail",
-                        "--embed-metadata",
-                        "-o",
-                        str(staging_dir / "%(title)s.%(ext)s"),
-                        clean_url,
-                    ]
-                    res = subprocess.run(cmd, capture_output=True, text=True)
-                    if res.returncode != 0:
-                        shutil.rmtree(staging_dir, ignore_errors=True)
-                        raise RuntimeError(f"yt-dlp fallback failed:\n{res.stderr or res.stdout}")
+                    raise RuntimeError(f"spotdl failed:\n{res.stderr or res.stdout}")
             else:
                 if not shutil.which("yt-dlp"):
                     shutil.rmtree(staging_dir, ignore_errors=True)
-                    raise RuntimeError("yt-dlp binary is not installed or not in PATH.")
+                    raise RuntimeError(
+                        "spotdl binary was not found and yt-dlp is unavailable. "
+                        "Please install spotdl (`pip install spotdl`) or yt-dlp."
+                    )
                 cmd = [
                     "yt-dlp",
                     "-x",
                     "--audio-format",
-                    fallback_format,
+                    audio_format,
                     "--audio-quality",
                     "0",
                     "--embed-thumbnail",
@@ -220,7 +163,28 @@ def download_media_staging(
                 res = subprocess.run(cmd, capture_output=True, text=True)
                 if res.returncode != 0:
                     shutil.rmtree(staging_dir, ignore_errors=True)
-                    raise RuntimeError(f"yt-dlp extraction failed:\n{res.stderr or res.stdout}")
+                    raise RuntimeError(f"yt-dlp fallback failed:\n{res.stderr or res.stdout}")
+        else:
+            if not shutil.which("yt-dlp"):
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise RuntimeError("yt-dlp binary is not installed or not in PATH.")
+            cmd = [
+                "yt-dlp",
+                "-x",
+                "--audio-format",
+                audio_format,
+                "--audio-quality",
+                "0",
+                "--embed-thumbnail",
+                "--embed-metadata",
+                "-o",
+                str(staging_dir / "%(title)s.%(ext)s"),
+                clean_url,
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise RuntimeError(f"yt-dlp extraction failed:\n{res.stderr or res.stdout}")
 
         # Probed metadata for lossless streaming
         if parsed_genius:
@@ -523,4 +487,3 @@ def run_retag_folder(
         status_updater("🎤 `[4/4]` *Generating Synced .lrc Lyrics...*")
     sync_all_lrc_in_folder(folder_path)
     return folder_path, meta
-

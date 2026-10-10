@@ -58,6 +58,7 @@ from services.system import get_album_folders, get_disk_metrics, get_system_diag
 from services.tagger import (
     apply_unified_metadata_to_album,
     apply_unified_metadata_to_file,
+    embed_and_save_cover_art,
     extract_cover_bytes,
     read_tags,
     write_loose_cover,
@@ -284,6 +285,7 @@ class ApplyMetadataPayload(BaseModel):
 class CommitTagsPayload(BaseModel):
     path: str = Field(..., min_length=1)
     fields: Dict[str, Any] = Field(default_factory=dict)
+    release_type: Optional[str] = None
     lyrics_lrc: Optional[str] = None
     cover_data_base64: Optional[str] = None
     cover_url: Optional[str] = None
@@ -736,6 +738,7 @@ async def get_library_api(user: Dict[str, Any] = Depends(verify_authorized_user)
 
 
 @api_router.get("/cover")
+@api_router.get("/studio/cover")
 async def get_cover_api(path: str):
     """Safely serves album cover artwork with path traversal verification and fallback."""
     loop = asyncio.get_running_loop()
@@ -744,15 +747,21 @@ async def get_cover_api(path: str):
     except ValueError:
         raise HTTPException(status_code=400, detail="Path traversal forbidden.")
 
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
     if cover_path and cover_path.is_file():
         media_type = "image/jpeg"
         if cover_path.suffix.lower() == ".png":
             media_type = "image/png"
         elif cover_path.suffix.lower() == ".webp":
             media_type = "image/webp"
-        return FileResponse(cover_path, media_type=media_type)
+        return FileResponse(cover_path, media_type=media_type, headers=headers)
 
-    return Response(content=DEFAULT_PLACEHOLDER_SVG, media_type="image/svg+xml")
+    return Response(content=DEFAULT_PLACEHOLDER_SVG, media_type="image/svg+xml", headers=headers)
 
 
 @api_router.post("/library/refetch-lyrics")
@@ -991,6 +1000,7 @@ async def inspect_tags_api(
         "path": str(target.relative_to(config.BASE_DOWNLOAD_DIR)),
         "type": "album" if target.is_dir() else "track",
         "tags": tags,
+        "release_type": tags.get("release_type", "Album" if target.is_dir() else "Single"),
     }
 
 
@@ -1003,10 +1013,15 @@ async def get_tags_cover_api(
     target = resolve_safe_path(path)
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, lambda: extract_cover_bytes(target))
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
     if res:
         cover_bytes, mime = res
-        return Response(content=cover_bytes, media_type=mime)
-    return Response(content=DEFAULT_PLACEHOLDER_SVG, media_type="image/svg+xml")
+        return Response(content=cover_bytes, media_type=mime, headers=headers)
+    return Response(content=DEFAULT_PLACEHOLDER_SVG, media_type="image/svg+xml", headers=headers)
 
 
 @api_router.get("/metadata/match")
@@ -1089,6 +1104,8 @@ async def commit_tags_api(
             logger.warning(f"Failed to fetch cover from URL {payload.cover_url}: {e}")
 
     fields = dict(payload.fields)
+    if payload.release_type:
+        fields["release_type"] = payload.release_type
     if payload.lyrics_lrc is not None:
         fields["lyrics_synced"] = payload.lyrics_lrc
 
@@ -1143,6 +1160,7 @@ async def studio_inspect_api(
             "album": data.get("album", target.name),
             "artist": data.get("artist", ""),
             "album_artist": data.get("album_artist", ""),
+            "release_type": data.get("release_type", "Album"),
             "year": data.get("year", ""),
             "genre": data.get("genre", ""),
             "composers": data.get("composers", []),
@@ -1165,6 +1183,7 @@ async def studio_inspect_api(
             "album": data.get("album", ""),
             "artist": data.get("artist", ""),
             "album_artist": data.get("album_artist", ""),
+            "release_type": data.get("release_type", "Single"),
             "year": data.get("year", ""),
             "genre": data.get("genre", ""),
             "composers": data.get("composers", []),
@@ -1177,6 +1196,7 @@ async def studio_inspect_api(
 
 
 @api_router.get("/studio/search-external")
+@api_router.get("/metadata/search-external")
 async def studio_search_external_api(
     query: str,
     type: str = "album",
@@ -1233,9 +1253,10 @@ async def studio_commit_api(
         except Exception as e:
             logger.warning(f"Failed to fetch studio cover from URL {payload.cover_url}: {e}")
 
-    # 2. Write loose cover to folder if target is a folder
+    # 2. Overwrite folder-level artwork & embedded tags across all audio files if target is a folder
     if target.is_dir() and cover_bytes:
         await loop.run_in_executor(None, lambda: write_loose_cover(target, cover_bytes))
+        await loop.run_in_executor(None, lambda: embed_and_save_cover_art(target, cover_bytes))
 
     # 3. Apply field updates to tracks
     def _apply_all() -> bool:

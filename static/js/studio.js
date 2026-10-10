@@ -17,6 +17,7 @@
       album: '',
       artist: '',
       album_artist: '',
+      release_type: 'Album',
       year: '',
       genre: '',
       composers: [],
@@ -41,10 +42,14 @@
       height: 0,
     },
     libraryAlbums: [],
+    libraryViewMode: 'flat', // 'flat' | 'artist'
+    librarySort: 'recent', // 'recent' | 'title_asc' | 'artist_asc' | 'year_desc'
+    libraryTypeFilter: 'all', // 'all' | 'album' | 'ep' | 'single'
+    librarySearchQuery: '',
     downloadTasks: [],
     taskPollTimer: null,
     musicRequests: [],
-    selectedQuality: 'auto',
+    selectedQuality: 'best',
   };
 
   // Column definitions: col index -> field key
@@ -215,6 +220,7 @@
         album: data.album || '',
         artist: data.artist || '',
         album_artist: data.album_artist || data.artist || '',
+        release_type: data.release_type || ((data.tracks || []).length <= 3 ? 'Single' : ((data.tracks || []).length <= 6 ? 'EP' : 'Album')),
         year: data.year || '',
         genre: data.genre || '',
         composers: Array.isArray(data.composers) ? [...data.composers] : [],
@@ -366,11 +372,51 @@
     showToast('Applied artwork from candidate provider', 'success');
   }
 
+  function refreshAlbumCoverDisplay(albumPath) {
+    if (!albumPath) return;
+    const timestamp = Date.now();
+    const coverUrl = getApiUrl(`/api/cover?path=${encodeURIComponent(albumPath)}&t=${timestamp}`);
+
+    state.cover.originalUrl = coverUrl;
+    state.cover.currentUrl = coverUrl;
+    state.cover.currentBase64 = null;
+    state.cover.isModified = false;
+
+    // Update header/inspector cover image
+    const mainCoverImg = document.getElementById('artPreviewImg') || document.querySelector('#current-album-cover, .album-cover-preview img');
+    if (mainCoverImg) {
+      mainCoverImg.src = coverUrl;
+    }
+    updateArtworkView();
+
+    // Update corresponding card in library if present
+    const encodedPath = encodeURIComponent(albumPath);
+    const cards = document.querySelectorAll(`.library-card[data-path="${encodedPath}"]`);
+    cards.forEach(card => {
+      const cardImg = card.querySelector('img');
+      if (cardImg) {
+        cardImg.src = coverUrl;
+      }
+    });
+
+    // Also update cached album item in state.libraryAlbums
+    if (state.libraryAlbums && state.libraryAlbums.length) {
+      const alb = state.libraryAlbums.find(a => (a.path === albumPath || a.folder === albumPath));
+      if (alb) {
+        alb.cover_url = coverUrl;
+        alb.has_cover = true;
+      }
+    }
+  }
+  window.refreshAlbumCoverDisplay = refreshAlbumCoverDisplay;
+
   // ================= COMMON ALBUM TAGS FORM =================
   function updateCommonAlbumForm() {
     document.getElementById('albumFieldTitle').value = state.albumMeta.album || '';
     document.getElementById('albumFieldArtist').value = state.albumMeta.album_artist || state.albumMeta.artist || '';
     document.getElementById('albumFieldYear').value = state.albumMeta.year || '';
+    const relTypeEl = document.getElementById('albumFieldReleaseType');
+    if (relTypeEl) relTypeEl.value = state.albumMeta.release_type || 'Album';
     document.getElementById('albumFieldGenre').value = state.albumMeta.genre || '';
     document.getElementById('albumFieldProducers').value = state.albumMeta.producers.join(', ');
     document.getElementById('albumFieldComposers').value = state.albumMeta.composers.join(', ');
@@ -380,6 +426,8 @@
     state.albumMeta.album = document.getElementById('albumFieldTitle').value.trim();
     state.albumMeta.album_artist = document.getElementById('albumFieldArtist').value.trim();
     state.albumMeta.year = document.getElementById('albumFieldYear').value.trim();
+    const relTypeEl = document.getElementById('albumFieldReleaseType');
+    if (relTypeEl) state.albumMeta.release_type = relTypeEl.value || 'Album';
     state.albumMeta.genre = document.getElementById('albumFieldGenre').value.trim();
 
     const rawProds = document.getElementById('albumFieldProducers').value.trim();
@@ -917,6 +965,7 @@
     const diffFields = [
       { key: 'album', name: 'Album Title', disk: state.albumMeta.album, cand: albumData.album || prev.album },
       { key: 'album_artist', name: 'Album Artist', disk: state.albumMeta.album_artist, cand: albumData.album_artist || prev.artist },
+      { key: 'release_type', name: 'Release Type', disk: state.albumMeta.release_type, cand: albumData.release_type || prev.release_type },
       { key: 'year', name: 'Year', disk: state.albumMeta.year, cand: albumData.year || prev.year },
       { key: 'genre', name: 'Genre', disk: state.albumMeta.genre, cand: albumData.genre || prev.genre },
       { key: 'producers', name: 'Producers', disk: state.albumMeta.producers.join(', '), cand: (albumData.producers || []).join(', ') },
@@ -949,6 +998,7 @@
   function applySingleDiffField(key, value) {
     if (key === 'album') state.albumMeta.album = value;
     else if (key === 'album_artist') state.albumMeta.album_artist = value;
+    else if (key === 'release_type') state.albumMeta.release_type = value;
     else if (key === 'year') state.albumMeta.year = value;
     else if (key === 'genre') state.albumMeta.genre = value;
     else if (key === 'producers') state.albumMeta.producers = value.split(',').map(s => s.trim()).filter(Boolean);
@@ -970,6 +1020,7 @@
 
     if (albumData.album || prev.album) state.albumMeta.album = albumData.album || prev.album;
     if (albumData.album_artist || prev.artist) state.albumMeta.album_artist = albumData.album_artist || prev.artist;
+    if (albumData.release_type || prev.release_type) state.albumMeta.release_type = albumData.release_type || prev.release_type;
     if (albumData.year || prev.year) state.albumMeta.year = albumData.year || prev.year;
     if (albumData.genre || prev.genre) state.albumMeta.genre = albumData.genre || prev.genre;
     if (albumData.producers) state.albumMeta.producers = [...albumData.producers];
@@ -1133,6 +1184,7 @@
         album_fields: {
           album: state.albumMeta.album,
           album_artist: state.albumMeta.album_artist,
+          release_type: state.albumMeta.release_type || 'Album',
           year: state.albumMeta.year,
           genre: state.albumMeta.genre,
           producers: state.albumMeta.producers,
@@ -1161,12 +1213,7 @@
 
       state.originalAlbumMeta = JSON.parse(JSON.stringify(state.albumMeta));
       state.originalTracks = JSON.parse(JSON.stringify(state.tracks));
-      state.cover.isModified = false;
-      state.cover.currentBase64 = null;
-      if (res.updated_tags?.cover_url) {
-        state.cover.originalUrl = res.updated_tags.cover_url;
-      }
-      updateArtworkView();
+      refreshAlbumCoverDisplay(state.currentPath);
       renderSpreadsheetGrid();
     } catch (err) {
       console.error('Failed to commit metadata:', err);
@@ -1193,56 +1240,141 @@
   window.toggleArtistGroup = function () { };
   window.toggleArtist = function () { };
 
-  // Render flat album grid (no artist grouping/collapsing)
-  function renderLibraryList(albumsToRender) {
+  function renderAlbumCardHtml(album) {
+    let coverSrc = album.cover_url || `/api/cover?path=${encodeURIComponent(album.path || '')}`;
+    if (!coverSrc.includes('t=')) {
+      coverSrc += (coverSrc.includes('?') ? '&' : '?') + `t=${album.mtime || Date.now()}`;
+    }
+    const title = escapeHtml(album.title || album.name || 'Untitled');
+    const artist = escapeHtml(album.artist || album.album_artist || 'Unknown Artist');
+    const encodedPath = encodeURIComponent(album.path || album.folder || '');
+    const relType = escapeHtml(album.release_type || 'Album');
+    const relTypeClass = escapeHtml((album.release_type || 'album').toLowerCase());
+
+    return `
+      <div class="library-card" data-path="${encodedPath}" title="${title} - ${artist}">
+        <div class="card-cover-wrapper">
+          <img src="${coverSrc}" 
+               alt="${title}" 
+               loading="lazy" 
+               onerror="this.src='/static/img/cover-placeholder.png'; this.onerror=null;" />
+          <span class="release-type-badge ${relTypeClass}">${relType}</span>
+        </div>
+        <div class="card-info">
+          <div class="card-title">${title}</div>
+          <div class="card-artist">${artist}</div>
+          <div class="card-subtitle">
+            ${album.year ? `<span>${escapeHtml(album.year)}</span> • ` : ''}
+            <span>${album.track_count ? album.track_count + ' tracks' : ''}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Render library grid with client-side reactive filtering, sorting, and view grouping
+  function renderLibraryList(customList) {
     const container = document.getElementById('library-list') || document.querySelector('.library-albums-container');
     if (!container) return;
 
-    if (!albumsToRender || albumsToRender.length === 0) {
-      container.innerHTML = '<div style="text-align:center; padding:40px; color:#64748b; font-size:14px;">No albums found.</div>';
+    let albums = customList || state.libraryAlbums || [];
+
+    // 1. Text filter (search query)
+    const q = (state.librarySearchQuery || '').trim().toLowerCase();
+    if (q) {
+      albums = albums.filter(alb => {
+        const title = (alb.title || alb.name || '').toLowerCase();
+        const artist = (alb.artist || alb.album_artist || '').toLowerCase();
+        return title.includes(q) || artist.includes(q);
+      });
+    }
+
+    // 2. Release Type Filter Pill
+    const filter = (state.libraryTypeFilter || 'all').toLowerCase();
+    if (filter !== 'all') {
+      albums = albums.filter(alb => {
+        const rt = (alb.release_type || '').toLowerCase();
+        return rt === filter;
+      });
+    }
+
+    if (!albums || albums.length === 0) {
+      container.innerHTML = '<div class="empty-state">No albums match the selected filters or search query.</div>';
       return;
     }
 
-    // Sort alphabetically by album title (or artist, if preferred)
-    const sorted = [...albumsToRender].sort((a, b) =>
-      (a.title || a.name || '').localeCompare(b.title || b.name || '')
-    );
+    // 3. Client-side Sort
+    const sortMode = state.librarySort || 'recent';
+    const sorted = [...albums].sort((a, b) => {
+      if (sortMode === 'recent') {
+        return (b.mtime || 0) - (a.mtime || 0);
+      } else if (sortMode === 'title_asc') {
+        return (a.title || a.name || '').localeCompare(b.title || b.name || '');
+      } else if (sortMode === 'artist_asc') {
+        const artDiff = (a.artist || a.album_artist || '').localeCompare(b.artist || b.album_artist || '');
+        if (artDiff !== 0) return artDiff;
+        return (a.title || a.name || '').localeCompare(b.title || b.name || '');
+      } else if (sortMode === 'year_desc') {
+        const ya = parseInt(a.year || '0', 10) || 0;
+        const yb = parseInt(b.year || '0', 10) || 0;
+        if (yb !== ya) return yb - ya;
+        return (b.mtime || 0) - (a.mtime || 0);
+      }
+      return 0;
+    });
 
-    container.innerHTML = `
-      <div class="library-flat-grid">
-        ${sorted.map(album => {
-      const coverSrc = album.cover_url || `/api/cover?path=${encodeURIComponent(album.path || '')}`;
-      const title = escapeHtml(album.title || album.name || 'Untitled');
-      const artist = escapeHtml(album.artist || album.album_artist || 'Unknown Artist');
-      const safePath = escapeHtml(album.path || album.folder || '');
+    // 4. View Mode: Flat Grid vs Group by Artist
+    if (state.libraryViewMode === 'artist') {
+      const artistMap = new Map();
+      sorted.forEach(alb => {
+        const art = alb.artist || alb.album_artist || 'Unknown Artist';
+        if (!artistMap.has(art)) {
+          artistMap.set(art, []);
+        }
+        artistMap.get(art).push(alb);
+      });
 
-      return `
-            <div class="library-card" onclick="loadAlbumByPath('${safePath}')" title="${title} - ${artist}">
-              <div class="card-cover-wrapper">
-                <img src="${coverSrc}" 
-                     alt="${title}" 
-                     loading="lazy" 
-                     onerror="this.src='/static/img/cover-placeholder.png'; this.onerror=null;" />
-              </div>
-              <div class="card-info">
-                <div class="card-title">${title}</div>
-                <div class="card-artist">${artist}</div>
-                <div class="card-subtitle">
-                  ${album.year ? `<span>${album.year}</span> • ` : ''}
-                  <span>${album.track_count ? album.track_count + ' tracks' : ''}</span>
-                </div>
-              </div>
+      let html = '';
+      artistMap.forEach((artistAlbums, artistName) => {
+        html += `
+          <div class="artist-group-section">
+            <div class="artist-group-header">
+              <span class="artist-group-icon">👤</span>
+              <span class="artist-group-name">${escapeHtml(artistName)}</span>
+              <span class="artist-group-count">${artistAlbums.length} ${artistAlbums.length === 1 ? 'release' : 'releases'}</span>
             </div>
-          `;
-    }).join('')}
-      </div>
-    `;
+            <div class="library-flat-grid">
+              ${artistAlbums.map(renderAlbumCardHtml).join('')}
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    } else {
+      container.innerHTML = `
+        <div class="library-flat-grid">
+          ${sorted.map(renderAlbumCardHtml).join('')}
+        </div>
+      `;
+    }
+
+    // Delegate card clicks safely without inline JS strings
+    container.onclick = (e) => {
+      const card = e.target.closest('.library-card');
+      if (!card) return;
+
+      const encodedPath = card.dataset.path;
+      if (!encodedPath) return;
+
+      const realPath = decodeURIComponent(encodedPath);
+      loadAlbumByPath(realPath);
+    };
   }
 
   const renderArtistTree = renderLibraryList;
 
   async function loadLibraryTree() {
-    const container = getLibraryContainer();
+    const container = document.getElementById('library-list') || document.querySelector('.library-albums-container');
     const summary = document.getElementById('libraryStatsSummary');
     if (container) {
       container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-dim);">Scanning Navidrome library...</div>`;
@@ -1258,6 +1390,9 @@
         name: alb.name || alb.title || alb.album || 'Unknown Album',
         album: alb.album || alb.title || alb.name || 'Unknown Album',
         artist: alb.artist || alb.album_artist || 'Unknown Artist',
+        release_type: alb.release_type || ((alb.track_count || 0) <= 3 ? 'Single' : ((alb.track_count || 0) <= 6 ? 'EP' : 'Album')),
+        year: alb.year || '',
+        mtime: alb.mtime || 0,
         cover_url: alb.cover_url || getApiUrl(`/api/cover?path=${encodeURIComponent(alb.path || alb.folder || '')}`),
       }));
 
@@ -1270,9 +1405,9 @@
       });
 
       if (summary) {
-        summary.textContent = `${state.libraryAlbums.length} albums across ${artistSet.size} artists (${totalTracks} tracks)`;
+        summary.textContent = `${state.libraryAlbums.length} releases across ${artistSet.size} artists (${totalTracks} tracks)`;
       }
-      renderLibraryList(state.libraryAlbums);
+      renderLibraryList();
     } catch (err) {
       if (container) {
         container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--accent-rose);">Failed to load library: ${escapeHtml(err.message)}</div>`;
@@ -1282,17 +1417,8 @@
 
   function filterLibraryTree(e) {
     const searchInput = document.getElementById('library-search-input') || document.getElementById('libViewFilterInput') || document.querySelector('.library-search input') || document.querySelector('.library-search-input');
-    const q = (e && e.target ? e.target.value : (searchInput ? searchInput.value : '')).trim().toLowerCase();
-    if (!q) {
-      renderLibraryList(state.libraryAlbums || []);
-      return;
-    }
-    const filtered = (state.libraryAlbums || []).filter(alb => {
-      const title = (alb.title || alb.name || '').toLowerCase();
-      const artist = (alb.artist || alb.album_artist || '').toLowerCase();
-      return title.includes(q) || artist.includes(q);
-    });
-    renderLibraryList(filtered);
+    state.librarySearchQuery = (e && e.target ? e.target.value : (searchInput ? searchInput.value : '')).trim().toLowerCase();
+    renderLibraryList();
   }
 
   // ================= VIEW 2: DOWNLOADER & TASK POLLING =================
@@ -1737,18 +1863,50 @@
     const libSearchInput = document.getElementById('library-search-input') || document.querySelector('.library-search input');
     if (libSearchInput) {
       libSearchInput.addEventListener('input', (e) => {
-        const q = e.target.value.trim().toLowerCase();
-        if (!q) {
-          renderLibraryList(state.libraryAlbums || []);
-          return;
-        }
-        const filtered = (state.libraryAlbums || []).filter(alb => {
-          const title = (alb.title || alb.name || '').toLowerCase();
-          const artist = (alb.artist || alb.album_artist || '').toLowerCase();
-          return title.includes(q) || artist.includes(q);
-        });
-        renderLibraryList(filtered);
+        state.librarySearchQuery = e.target.value;
+        renderLibraryList();
       });
+    }
+
+    // Type Filter Pills
+    const typeFilterGroup = document.getElementById('libraryTypeFilters');
+    if (typeFilterGroup) {
+      typeFilterGroup.querySelectorAll('.filter-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          typeFilterGroup.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+          pill.classList.add('active');
+          state.libraryTypeFilter = pill.dataset.filter || 'all';
+          renderLibraryList();
+        });
+      });
+    }
+
+    // Sort By Select
+    const sortSelect = document.getElementById('librarySortSelect');
+    if (sortSelect) {
+      sortSelect.addEventListener('change', (e) => {
+        state.librarySort = e.target.value;
+        renderLibraryList();
+      });
+    }
+
+    // View Mode Switcher
+    const modeToggle = document.getElementById('libraryViewModeToggle');
+    if (modeToggle) {
+      modeToggle.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          modeToggle.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          state.libraryViewMode = btn.dataset.mode || 'flat';
+          renderLibraryList();
+        });
+      });
+    }
+
+    // Release Type select in album editor
+    const relSelect = document.getElementById('albumFieldReleaseType');
+    if (relSelect) {
+      relSelect.addEventListener('change', syncCommonAlbumFormToState);
     }
 
     // Modals
