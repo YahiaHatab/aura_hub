@@ -1182,89 +1182,102 @@
     return document.getElementById('library-list') || document.querySelector('.library-albums-container') || document.getElementById('artistTreeContainer');
   }
 
-  // Global accordion toggler
-  window.toggleArtistGroup = function(btn) {
-    const group = btn.closest('.artist-tree-group');
+  // Global toggle helper
+  window.toggleArtist = function(idx) {
+    const group = document.getElementById(`albums-group-${idx}`);
+    const chevron = document.getElementById(`chevron-${idx}`);
     if (!group) return;
-    const grid = group.querySelector('.artist-albums-grid');
-    const chevron = group.querySelector('.chevron-icon') || group.querySelector('.artist-toggle-icon');
-    if (!grid) return;
-    const isOpen = grid.style.display !== 'none';
 
-    grid.style.display = isOpen ? 'none' : 'grid';
-    group.classList.toggle('collapsed', isOpen);
-    if (chevron) {
-      chevron.textContent = isOpen ? '▶' : '▼';
+    const isHidden = group.style.display === 'none' || getComputedStyle(group).display === 'none';
+    if (isHidden) {
+      group.style.display = 'grid';
+      if (chevron) chevron.textContent = '▼';
+    } else {
+      group.style.display = 'none';
+      if (chevron) chevron.textContent = '▶';
     }
+  };
+
+  // Backwards-compatible toggler
+  window.toggleArtistGroup = function(btn) {
+    const group = btn.closest('.artist-group') || btn.closest('.artist-tree-group');
+    if (!group) return;
+    const grid = group.querySelector('.artist-albums-container') || group.querySelector('.artist-albums-grid');
+    const chevron = group.querySelector('.chevron') || group.querySelector('.chevron-icon');
+    if (!grid) return;
+    const isHidden = grid.style.display === 'none' || getComputedStyle(grid).display === 'none';
+    grid.style.display = isHidden ? 'grid' : 'none';
+    if (chevron) chevron.textContent = isHidden ? '▼' : '▶';
   };
 
   // Global loader to open album in studio editor
-  window.loadAlbumIntoStudio = function(path) {
+  window.loadAlbumByPath = function(path) {
     if (!path) return;
     inspectPath(path);
   };
+  window.loadAlbumIntoStudio = window.loadAlbumByPath;
 
   function renderLibraryList(albums) {
-    const container = getLibraryContainer();
+    const container = document.getElementById('library-list') || document.querySelector('.library-albums-container') || document.getElementById('artistTreeContainer');
     if (!container) return;
 
-    if (!albums || albums.length === 0) {
-      container.innerHTML = '<div class="empty-state">No albums found in library.</div>';
+    if (!albums || !albums.length) {
+      container.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b;">No albums found.</div>';
       return;
     }
 
-    // Group by artist cleanly
-    const artistMap = {};
-    albums.forEach(rawAlb => {
-      const albPath = rawAlb.path || rawAlb.folder || '';
-      const albTitle = rawAlb.title || rawAlb.album || 'Unknown Album';
-      const artist = rawAlb.artist || rawAlb.album_artist || 'Unknown Artist';
-      const coverUrl = rawAlb.cover_url || (albPath ? getApiUrl(`/api/cover?path=${encodeURIComponent(albPath)}`) : '/static/img/cover-placeholder.png');
-
-      const album = {
-        ...rawAlb,
-        path: albPath,
-        folder: albPath,
-        title: albTitle,
-        album: albTitle,
+    // Group albums by artist
+    const groups = {};
+    albums.forEach(alb => {
+      const artist = alb.artist || alb.album_artist || "Unknown Artist";
+      const path = alb.path || alb.folder || '';
+      const title = alb.title || alb.name || alb.album || 'Untitled';
+      const cover = alb.cover_url || (path ? getApiUrl('/api/cover?path=' + encodeURIComponent(path)) : '/static/img/cover-placeholder.png');
+      const normalizedAlb = {
+        ...alb,
+        path: path,
+        folder: path,
+        title: title,
+        name: title,
+        album: title,
         artist: artist,
-        cover_url: coverUrl,
-        track_count: rawAlb.track_count || 0,
-        year: rawAlb.year || '',
+        cover_url: cover,
+        track_count: alb.track_count || 0,
+        year: alb.year || '',
       };
-
-      if (!artistMap[artist]) artistMap[artist] = [];
-      artistMap[artist].push(album);
+      if (!groups[artist]) groups[artist] = [];
+      groups[artist].push(normalizedAlb);
     });
 
-    const sortedArtists = Object.keys(artistMap).sort((a, b) => a.localeCompare(b));
+    const sortedArtists = Object.keys(groups).sort((a, b) => a.localeCompare(b));
 
-    container.innerHTML = sortedArtists.map((artist) => {
-      const artistAlbums = artistMap[artist];
-      const albumCount = artistAlbums.length;
-      
+    container.innerHTML = sortedArtists.map((artist, idx) => {
+      const artistAlbums = groups[artist];
       return `
-        <div class="artist-tree-group" data-artist="${escapeHtml(artist)}">
-          <button type="button" class="artist-tree-header" onclick="toggleArtistGroup(this)">
-            <div class="artist-header-left">
-              <span class="chevron-icon">▶</span>
-              <span class="artist-name">${escapeHtml(artist)}</span>
+        <div class="artist-group" data-artist="${escapeHtml(artist)}">
+          <div class="artist-header" onclick="toggleArtist(${idx})">
+            <div class="artist-header-info">
+              <span class="chevron" id="chevron-${idx}">▶</span>
+              <span class="artist-title">${escapeHtml(artist)}</span>
             </div>
-            <span class="artist-count-pill">${albumCount} ${albumCount === 1 ? 'album' : 'albums'}</span>
-          </button>
-          <div class="artist-albums-grid" style="display: none;">
-            ${artistAlbums.map(alb => `
-              <div class="library-album-card" onclick="loadAlbumIntoStudio('${escapeHtml(alb.path)}')">
-                <div class="album-card-cover">
-                  <img src="${alb.cover_url || '/static/img/cover-placeholder.png'}" 
-                       alt="${escapeHtml(alb.title)}" 
+            <span class="album-badge">${artistAlbums.length} ${artistAlbums.length === 1 ? 'album' : 'albums'}</span>
+          </div>
+          <div class="artist-albums-container" id="albums-group-${idx}" style="display: none;">
+            ${artistAlbums.map(album => `
+              <div class="library-card" onclick="loadAlbumByPath('${escapeHtml(album.path || album.folder || '')}')">
+                <div class="card-cover-wrapper">
+                  <img src="${album.cover_url || getApiUrl('/api/cover?path=' + encodeURIComponent(album.path || ''))}" 
+                       alt="${escapeHtml(album.title || album.name || 'Album')}" 
                        loading="lazy"
-                       onerror="this.onerror=null; this.src='/static/img/cover-placeholder.png';" />
+                       onerror="this.src='/static/img/cover-placeholder.png'; this.onerror=null;" />
                 </div>
-                <div class="album-card-meta">
-                  <div class="album-card-title" title="${escapeHtml(alb.title)}">${escapeHtml(alb.title)}</div>
-                  <div class="album-card-sub">
-                    ${alb.year ? `<span>${alb.year}</span> • ` : ''}<span>${alb.track_count || 0} tracks</span>
+                <div class="card-info">
+                  <div class="card-title" title="${escapeHtml(album.title || album.name || '')}">
+                    ${escapeHtml(album.title || album.name || 'Untitled')}
+                  </div>
+                  <div class="card-subtitle">
+                    ${album.year ? `<span>${album.year}</span> • ` : ''}
+                    <span>${album.track_count ? album.track_count + ' tracks' : ''}</span>
                   </div>
                 </div>
               </div>
