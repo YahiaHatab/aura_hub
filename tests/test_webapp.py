@@ -591,6 +591,138 @@ class TestWebAppAndSecurity(unittest.TestCase):
                             self.assertIn("Successfully updated", data["message"])
                             mock_write.assert_called_once()
 
+    def test_serve_studio_html(self):
+        """Tests that GET /studio, /studio.html, /hub/studio, and /hub/studio.html serve studio.html."""
+        for path in ["/studio", "/studio.html", "/hub/studio", "/hub/studio.html"]:
+            res = self.client.get(path)
+            self.assertEqual(res.status_code, 200)
+            self.assertIn("text/html", res.headers.get("content-type", ""))
+            self.assertIn("AURA STUDIO", res.text)
+
+    def test_studio_inspect_endpoint(self):
+        """Tests GET /api/studio/inspect for album directories and single tracks."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            album_dir = tmp_path / "Artist" / "Album"
+            album_dir.mkdir(parents=True)
+            track_f = album_dir / "01 - Track.mp3"
+            track_f.write_bytes(b"dummy")
+
+            mock_album_tags = {
+                "is_dir": True,
+                "album": "Album",
+                "artist": "Artist",
+                "album_artist": "Artist",
+                "year": "2024",
+                "genre": "Pop",
+                "composers": ["Composer A"],
+                "producers": ["Producer B"],
+                "has_cover": True,
+                "track_count": 1,
+                "tracks": [
+                    {
+                        "filename": "01 - Track.mp3",
+                        "title": "Track",
+                        "artist": "Artist",
+                        "track_number": 1,
+                        "duration_seconds": 180.0,
+                        "lyrics": "[00:10.00] Line",
+                    }
+                ],
+            }
+
+            with patch("config.BASE_DOWNLOAD_DIR", tmp_path):
+                with patch("services.web.read_tags", return_value=mock_album_tags):
+                    res = self.client.get("/api/studio/inspect?path=Artist/Album", headers=self.regular_headers)
+                    self.assertEqual(res.status_code, 200)
+                    data = res.json()
+                    self.assertTrue(data["ok"])
+                    self.assertTrue(data["is_folder"])
+                    self.assertEqual(data["album"], "Album")
+                    self.assertEqual(len(data["tracks"]), 1)
+                    self.assertEqual(data["tracks"][0]["title"], "Track")
+
+    def test_studio_search_external_endpoint(self):
+        """Tests GET /api/studio/search-external querying multi-provider metadata candidates."""
+        mock_candidates = [
+            {
+                "source": "Deezer",
+                "confidence_score": 92.5,
+                "is_recommended": True,
+                "preview": {
+                    "album": "Matched Album",
+                    "artist": "Matched Artist",
+                    "year": "2023",
+                    "track_count": 10,
+                },
+                "album_data": {
+                    "album": "Matched Album",
+                    "artist": "Matched Artist",
+                    "year": "2023",
+                    "genre": "Pop",
+                },
+            }
+        ]
+
+        with patch("services.web.search_metadata_async", return_value=mock_candidates):
+            res = self.client.get(
+                "/api/studio/search-external?query=Matched+Album&type=album&artist=Matched+Artist",
+                headers=self.regular_headers,
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["count"], 1)
+            self.assertEqual(data["candidates"][0]["source"], "Deezer")
+
+    def test_studio_commit_endpoint(self):
+        """Tests POST /api/studio/commit with auth checks, batch track writing, and Navidrome scan."""
+        payload = {
+            "path": "Artist/Album",
+            "album_fields": {
+                "album": "Updated Album",
+                "album_artist": "Updated Artist",
+                "year": "2025",
+                "genre": "Rock",
+            },
+            "tracks": [
+                {
+                    "filename": "01.mp3",
+                    "track_number": 1,
+                    "title": "Song One",
+                    "artist": "Updated Artist",
+                    "lyrics": "[00:05.00] Intro line",
+                }
+            ],
+            "cover_base64": "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff\xe0JFIF").decode("ascii"),
+            "rescan": True,
+        }
+
+        # Non-admin -> 403 Forbidden
+        res_user = self.client.post("/api/studio/commit", json=payload, headers=self.regular_headers)
+        self.assertEqual(res_user.status_code, 403)
+
+        # Admin user
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            album_dir = tmp_path / "Artist" / "Album"
+            album_dir.mkdir(parents=True)
+            track_file = album_dir / "01.mp3"
+            track_file.write_bytes(b"dummy")
+
+            with patch("config.BASE_DOWNLOAD_DIR", tmp_path):
+                with patch("services.web.write_tags", return_value=True) as mock_write:
+                    with patch("services.web.write_loose_cover", return_value=True) as mock_loose_cover:
+                        with patch("services.web.read_tags", return_value={"album": "Updated Album"}):
+                            with patch("services.navidrome.scan_path", return_value={"ok": True}):
+                                res_admin = self.client.post("/api/studio/commit", json=payload, headers=self.admin_headers)
+                                self.assertEqual(res_admin.status_code, 200)
+                                data = res_admin.json()
+                                self.assertTrue(data["ok"])
+                                self.assertIn("Successfully committed", data["message"])
+                                mock_write.assert_called()
+                                mock_loose_cover.assert_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,7 +44,12 @@ aura_hub/
 │   ├── tasks.py              # In-memory background task manager for tracking active downloads
 │   └── web.py                # FastAPI WebApp backend with HMAC-SHA256 signature verification
 ├── static/
-│   └── index.html            # Telegram Mini App responsive single-page dashboard
+│   ├── index.html            # Telegram Mini App responsive single-page dashboard
+│   ├── studio.html           # Dedicated Desktop Metadata Studio power-user web app
+│   ├── css/
+│   │   └── studio.css        # Desktop Studio high-density grid, diff, and editor styles
+│   └── js/
+│       └── studio.js         # Desktop Studio state management, spreadsheet navigation & diffing
 ├── handlers/
 │   ├── __init__.py           # Package marker
 │   ├── common.py             # /start, /help, /hub, /status, user authentication checks
@@ -214,6 +219,18 @@ Subprocess calls (`yt-dlp`, `spotdl`), network I/O (`urllib`), and heavy mutagen
     - If quality is `auto` or `flac`: Attempts lossless extraction via `SpotiFLAC`. If `.flac` files are produced, tags them natively with `mutagen.flac`. If no `.flac` files exist or SpotiFLAC fails:
       - Forced `flac`: Raises a clear error stating FLAC could not be resolved.
       - `auto`: Logs fallback and extracts native Opus via `yt-dlp` or `spotdl`.
+
+### 4.12 Desktop Metadata Studio (`static/studio.html`, `static/css/studio.css`, `static/js/studio.js`)
+- **Desktop Power-User Interface:** Served via `/studio`, `/studio.html`, `/hub/studio`, and `/hub/studio.html`. Designed specifically for desktop screens with a high-density, three-column layout.
+- **REST Endpoints (`services/web.py`):**
+  - `GET /api/studio/inspect?path=...`: Returns album and track metadata, duration, cover artwork URL, embedded/companion lyrics, and tracklist.
+  - `GET /api/studio/search-external?query=...&type=album|track&artist=...`: Multi-backend search querying MusicBrainz, Deezer, Spotify, iTunes, Discogs, and LRCLIB with confidence scores and recommended flags.
+  - `POST /api/studio/commit`: Batch writes edited track tags, album-level fields, base64 or URL cover images, companion `.lrc` files, and triggers background `services.navidrome.scan_path()`.
+- **Spreadsheet Tag Grid:** Multi-row, multi-column editable table with keyboard navigation (`Tab`, `Shift+Tab`, `Enter`, arrows `↑ ↓ ← →`, `Esc`) for track numbers, titles, artists, composers, producers, genres, years, durations, and lyrics status badges. Dirty cell tracking with visual indicators.
+- **Side-by-Side Diff Inspector:** Displays candidate cards from external providers alongside disk tags with field-by-field diff comparison and single-click acceptance toggles or bulk "Accept All".
+- **Artwork Manager:** Drag-and-drop cover replacement, resolution checker (`naturalWidth × naturalHeight`), file picker, and candidate provider artwork picker.
+- **Synced Lyrics Editor:** Full-height textarea displaying timestamps with instant offset shifting (`+/- 200ms`, `+/- 500ms`) and direct LRCLIB search.
+- **Keyboard Shortcuts & Library Browser:** Integrated modal album picker and shortcut cheat sheet (`Ctrl+S`, `Tab`, `Enter`, `?`).
 
 ---
 

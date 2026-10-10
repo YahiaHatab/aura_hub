@@ -24,7 +24,7 @@ from mutagen.id3 import ID3, ID3NoHeaderError
 from mutagen.mp4 import MP4
 from mutagen.oggopus import OggOpus
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -159,8 +159,9 @@ def verify_telegram_init_data(
 async def get_current_user(
     authorization: Optional[str] = Header(None),
     x_telegram_init_data: Optional[str] = Header(None),
+    auth_token: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
-    """Authenticates the incoming request using Telegram initData from Bearer or custom header."""
+    """Authenticates the incoming request using Telegram initData from Bearer, header, or query param."""
     raw_token = ""
     if authorization:
         if authorization.startswith("Bearer "):
@@ -169,6 +170,8 @@ async def get_current_user(
             raw_token = authorization.strip()
     elif x_telegram_init_data:
         raw_token = x_telegram_init_data.strip()
+    elif auth_token:
+        raw_token = auth_token.strip()
 
     if not raw_token:
         raise HTTPException(
@@ -271,6 +274,15 @@ class CommitTagsPayload(BaseModel):
     fields: Dict[str, Any] = Field(default_factory=dict)
     lyrics_lrc: Optional[str] = None
     cover_data_base64: Optional[str] = None
+    cover_url: Optional[str] = None
+    rescan: Optional[bool] = True
+
+
+class StudioCommitPayload(BaseModel):
+    path: str = Field(..., min_length=1)
+    album_fields: Dict[str, Any] = Field(default_factory=dict)
+    tracks: List[Dict[str, Any]] = Field(default_factory=list)
+    cover_base64: Optional[str] = None
     cover_url: Optional[str] = None
     rescan: Optional[bool] = True
 
@@ -475,6 +487,28 @@ async def serve_dashboard():
         )
     return FileResponse(
         index_file,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+@app.get("/studio", response_class=FileResponse)
+@app.get("/studio.html", response_class=FileResponse)
+@app.get("/hub/studio", response_class=FileResponse)
+@app.get("/hub/studio.html", response_class=FileResponse)
+async def serve_studio():
+    """Serves the dedicated Desktop Metadata Studio web application."""
+    studio_file = STATIC_DIR / "studio.html"
+    if not studio_file.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Studio frontend not found. Ensure static/studio.html exists.",
+        )
+    return FileResponse(
+        studio_file,
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
@@ -1058,6 +1092,188 @@ async def commit_tags_api(
         "updated_tags": updated_tags,
     }
 
+
+# ================= METADATA STUDIO API =================
+@api_router.get("/studio/inspect")
+async def studio_inspect_api(
+    path: str,
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Returns all tracks in an album folder or single track with current tags, cover preview URL, and lyrics."""
+    target = resolve_safe_path(path)
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(None, lambda: read_tags(target))
+    rel_path = str(target.relative_to(config.BASE_DOWNLOAD_DIR)).replace("\\", "/")
+    cover_url = f"/api/cover?path={urllib.parse.quote(rel_path)}"
+
+    if data.get("is_dir"):
+        tracks = data.get("tracks", [])
+        for t in tracks:
+            if "lyrics" not in t:
+                t["lyrics"] = t.get("lyrics_synced") or t.get("lyrics_unsynced") or ""
+        return {
+            "ok": True,
+            "path": rel_path,
+            "is_folder": True,
+            "folder": data.get("folder", target.name),
+            "album": data.get("album", target.name),
+            "artist": data.get("artist", ""),
+            "album_artist": data.get("album_artist", ""),
+            "year": data.get("year", ""),
+            "genre": data.get("genre", ""),
+            "composers": data.get("composers", []),
+            "producers": data.get("producers", []),
+            "has_cover": data.get("has_cover", False),
+            "track_count": data.get("track_count", len(tracks)),
+            "cover_url": cover_url,
+            "tracks": tracks,
+        }
+    else:
+        # Single track inspection
+        if "lyrics" not in data:
+            data["lyrics"] = data.get("lyrics_synced") or data.get("lyrics_unsynced") or ""
+        folder_rel = str(target.parent.relative_to(config.BASE_DOWNLOAD_DIR)).replace("\\", "/")
+        return {
+            "ok": True,
+            "path": rel_path,
+            "is_folder": False,
+            "folder": folder_rel,
+            "album": data.get("album", ""),
+            "artist": data.get("artist", ""),
+            "album_artist": data.get("album_artist", ""),
+            "year": data.get("year", ""),
+            "genre": data.get("genre", ""),
+            "composers": data.get("composers", []),
+            "producers": data.get("producers", []),
+            "has_cover": data.get("has_cover", False),
+            "track_count": 1,
+            "cover_url": cover_url,
+            "tracks": [data],
+        }
+
+
+@api_router.get("/studio/search-external")
+async def studio_search_external_api(
+    query: str,
+    type: str = "album",
+    artist: str = "",
+    user: Dict[str, Any] = Depends(verify_authorized_user),
+):
+    """Fetches matched provider candidates with confidence rankings from external music databases."""
+    clean_q = query.strip()
+    clean_art = artist.strip()
+    if not clean_q:
+        raise HTTPException(status_code=400, detail="Missing required query parameter.")
+
+    candidates = await search_metadata_async(
+        query=clean_q,
+        type=type.lower(),
+        artist=clean_art,
+    )
+
+    return {
+        "ok": True,
+        "query": clean_q,
+        "type": type.lower(),
+        "artist": clean_art,
+        "count": len(candidates),
+        "candidates": candidates,
+    }
+
+
+@api_router.post("/studio/commit")
+async def studio_commit_api(
+    payload: StudioCommitPayload,
+    admin_user: Dict[str, Any] = Depends(verify_admin_user),
+):
+    """Saves modified track grids, writes image art, companion .lrc lyrics, and triggers library rescan."""
+    target = resolve_safe_path(payload.path)
+    loop = asyncio.get_running_loop()
+
+    # 1. Resolve cover art bytes if uploaded or selected via URL
+    cover_bytes: Optional[bytes] = None
+    if payload.cover_base64:
+        raw_b64 = payload.cover_base64.strip()
+        if "," in raw_b64 and "base64" in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        try:
+            cover_bytes = base64.b64decode(raw_b64)
+        except Exception as e:
+            logger.warning(f"Failed to decode base64 studio cover: {e}")
+    elif payload.cover_url:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(payload.cover_url)
+                if resp.status_code == 200:
+                    cover_bytes = resp.content
+        except Exception as e:
+            logger.warning(f"Failed to fetch studio cover from URL {payload.cover_url}: {e}")
+
+    # 2. Write loose cover to folder if target is a folder
+    if target.is_dir() and cover_bytes:
+        await loop.run_in_executor(None, lambda: write_loose_cover(target, cover_bytes))
+
+    # 3. Apply field updates to tracks
+    def _apply_all() -> bool:
+        all_ok = True
+        valid_exts = {".mp3", ".flac", ".opus", ".m4a"}
+        if target.is_dir():
+            file_map = {
+                f.name: f
+                for f in target.iterdir()
+                if f.is_file() and f.suffix.lower() in valid_exts
+            }
+            if payload.tracks:
+                for trk in payload.tracks:
+                    fname = trk.get("filename")
+                    dest_file = file_map.get(fname)
+                    if not dest_file and fname:
+                        dest_file = target / fname
+                    if dest_file and dest_file.is_file():
+                        merged = dict(payload.album_fields)
+                        merged.update(trk)
+                        if "lyrics" in trk and "lyrics_synced" not in trk:
+                            merged["lyrics_synced"] = trk["lyrics"]
+                        ok = write_tags(dest_file, merged, cover_bytes=cover_bytes)
+                        if not ok:
+                            all_ok = False
+            else:
+                for f in file_map.values():
+                    ok = write_tags(f, payload.album_fields, cover_bytes=cover_bytes)
+                    if not ok:
+                        all_ok = False
+        else:
+            merged = dict(payload.album_fields)
+            if payload.tracks:
+                trk = payload.tracks[0]
+                merged.update(trk)
+                if "lyrics" in trk and "lyrics_synced" not in trk:
+                    merged["lyrics_synced"] = trk["lyrics"]
+            all_ok = write_tags(target, merged, cover_bytes=cover_bytes)
+        return all_ok
+
+    success = await loop.run_in_executor(None, _apply_all)
+    if not success:
+        logger.warning(f"Studio commit completed with partial or full errors on {target.name}")
+
+    # 4. Trigger Navidrome rescan
+    if payload.rescan:
+        async def _trigger_rescan():
+            try:
+                await loop.run_in_executor(None, lambda: services.navidrome.scan_path(target))
+            except Exception as e:
+                logger.warning(f"Background studio rescan failed: {e}")
+        asyncio.create_task(_trigger_rescan())
+
+    updated_tags = await loop.run_in_executor(None, lambda: read_tags(target))
+    rel_path = str(target.relative_to(config.BASE_DOWNLOAD_DIR)).replace("\\", "/")
+
+    return {
+        "ok": True,
+        "message": f"Successfully committed metadata for {target.name}",
+        "path": rel_path,
+        "updated_tags": updated_tags,
+    }
 
 
 # Mount API routes under both /api and /hub/api to support reverse proxy subpaths

@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aura Hub — Metadata Studio</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Telegram WebApp SDK if loaded in Telegram desktop or browser -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <link rel="stylesheet" href="css/studio.css">
+</head>
+<body>
+
+  <!-- ================= TOP NAVBAR ================= -->
+  <header class="studio-navbar">
+    <div class="nav-brand-section">
+      <div class="nav-brand-badge">
+        <span>⚡</span> AURA STUDIO
+      </div>
+      <div class="nav-current-target" id="navTargetBadge" title="Current directory">
+        <span>📁</span> <strong id="navAlbumName">No Folder Loaded</strong>
+      </div>
+    </div>
+
+    <!-- External Metadata Search Bar -->
+    <div class="nav-search-section">
+      <span class="nav-search-icon">🔍</span>
+      <input type="text" class="nav-search-input" id="navSearchInput" placeholder="Search provider metadata (e.g. Amr Diab Saharna Ya Lail)..." autocomplete="off">
+      <button class="nav-search-btn" id="btnSearchExternal">Search</button>
+    </div>
+
+    <!-- Actions -->
+    <div class="nav-actions">
+      <button class="btn btn-secondary" id="btnOpenLibrary" title="Browse Albums in Library">
+        <span>📚</span> Browse Library
+      </button>
+      <button class="btn btn-secondary btn-icon" id="btnShortcuts" title="Keyboard Shortcuts (?)">
+        <span>⌨️</span>
+      </button>
+      <button class="btn btn-secondary btn-icon" id="btnAuthSettings" title="Auth Token Settings">
+        <span>🔑</span>
+      </button>
+      <button class="btn btn-primary" id="btnCommitChanges" title="Save metadata (Ctrl+S)">
+        <span>💾</span> Save Changes
+      </button>
+      <a href="index.html" class="btn btn-secondary" id="btnDashboardLink" title="Return to Mini App Dashboard">
+        <span>📱</span> Hub
+      </a>
+    </div>
+  </header>
+
+  <!-- ================= MAIN THREE-COLUMN WORKSPACE ================= -->
+  <main class="studio-layout">
+
+    <!-- LEFT SIDEBAR: Artwork Manager & Album Common Tags -->
+    <aside class="studio-sidebar-left">
+      <!-- Artwork Manager -->
+      <section>
+        <div class="section-header">
+          <span class="section-title">🖼️ Cover Artwork</span>
+          <span class="art-badge-modified" id="artModifiedBadge">Modified</span>
+        </div>
+
+        <div class="art-dropzone" id="artDropzone" title="Click or drag image to replace album cover">
+          <img class="art-preview-img" id="artPreviewImg" alt="Album Cover Preview">
+          <div class="art-placeholder" id="artPlaceholder">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+            </svg>
+            <span style="font-size:12px; font-weight:600;">Drop Cover Image</span>
+            <span style="font-size:11px;">or click to browse</span>
+          </div>
+          <span class="art-badge-res" id="artBadgeRes">0 × 0</span>
+        </div>
+        <input type="file" id="artFileInput" accept="image/jpeg,image/png,image/webp" style="display:none;">
+
+        <div class="art-controls">
+          <button class="btn btn-secondary" style="flex:1; font-size:11px;" id="btnBrowseArt">Browse</button>
+          <button class="btn btn-secondary" style="font-size:11px;" id="btnResetArt" title="Reset artwork to disk">Reset</button>
+        </div>
+
+        <!-- Provider Art Thumbnails -->
+        <div class="provider-art-picker" id="providerArtSection" style="margin-top:14px; display:none;">
+          <div class="section-header">
+            <span class="section-title" style="font-size:11px;">Candidate Artwork</span>
+          </div>
+          <div class="provider-art-grid" id="providerArtGrid"></div>
+        </div>
+      </section>
+
+      <!-- Common Album Tags -->
+      <section class="common-tags-card">
+        <div class="section-header">
+          <span class="section-title">💿 Album Fields</span>
+          <button class="btn btn-secondary" style="font-size:10px; padding:3px 7px;" id="btnApplyCommonToTracks" title="Fill down album fields into all track rows">Apply to Tracks</button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Album Title</label>
+          <input type="text" class="form-input" id="albumFieldTitle" placeholder="Album name">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Album Artist</label>
+          <input type="text" class="form-input" id="albumFieldArtist" placeholder="Artist or Various Artists">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Year</label>
+            <input type="text" class="form-input" id="albumFieldYear" placeholder="YYYY">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Genre</label>
+            <input type="text" class="form-input" id="albumFieldGenre" placeholder="Genre">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Producers</label>
+          <input type="text" class="form-input" id="albumFieldProducers" placeholder="Producers (comma-separated)">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Composers</label>
+          <input type="text" class="form-input" id="albumFieldComposers" placeholder="Composers (comma-separated)">
+        </div>
+      </section>
+    </aside>
+
+    <!-- CENTER WORKSPACE: Spreadsheet Grid & Side-by-Side Diff Inspector -->
+    <section class="studio-workspace-center">
+      <!-- Toolbar & Tabs -->
+      <div class="workspace-toolbar">
+        <div class="workspace-tabs">
+          <button class="tab-btn active" id="tabBtnGrid">
+            <span>📊</span> Spreadsheet Grid <span class="tab-badge" id="badgeTrackCount">0</span>
+          </button>
+          <button class="tab-btn" id="tabBtnDiff">
+            <span>⚖️</span> Side-by-Side Diff <span class="tab-badge" id="badgeCandidateCount" style="display:none;">0</span>
+          </button>
+        </div>
+
+        <div class="grid-actions">
+          <button class="btn btn-secondary" style="font-size:11px; padding:5px 9px;" id="btnAutoNumber" title="Re-sequence tracks 1 through N">Auto #</button>
+          <button class="btn btn-secondary" style="font-size:11px; padding:5px 9px;" id="btnDiscardChanges" title="Revert all unsaved changes">Discard</button>
+        </div>
+      </div>
+
+      <!-- TAB 1: SPREADSHEET TAG GRID -->
+      <div class="grid-container" id="gridContainer">
+        <table class="studio-grid" id="studioGrid">
+          <thead>
+            <tr>
+              <th class="col-num">#</th>
+              <th style="min-width: 220px;">Title</th>
+              <th style="min-width: 170px;">Artist</th>
+              <th style="min-width: 160px;">Album Artist</th>
+              <th style="min-width: 140px;">Composer</th>
+              <th style="min-width: 140px;">Producer</th>
+              <th style="min-width: 120px;">Genre</th>
+              <th style="width: 70px;">Year</th>
+              <th class="col-duration">Time</th>
+              <th class="col-lrc">LRC</th>
+            </tr>
+          </thead>
+          <tbody id="gridTbody">
+            <!-- Dynamically populated rows -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- TAB 2: SIDE-BY-SIDE DIFF INSPECTOR -->
+      <div class="diff-view-container" id="diffContainer" style="display:none;">
+        <div>
+          <div class="section-header" style="margin-bottom:10px;">
+            <span class="section-title">🔍 External Candidate Matches</span>
+            <span style="font-size:12px; color:var(--text-dim);" id="diffStatusNote">Select a candidate to inspect field differences</span>
+          </div>
+          <div class="diff-candidates-bar" id="diffCandidatesBar">
+            <!-- Candidate cards dynamically rendered -->
+          </div>
+        </div>
+
+        <div class="diff-table-card" id="diffTableCard" style="display:none;">
+          <div class="diff-table-header">
+            <div>
+              <strong id="diffCandidateTitle" style="font-size:14px; color:var(--text-main);">Candidate Diff</strong>
+              <span id="diffCandidateSourceBadge" class="candidate-source-badge" style="margin-left:8px;">Source</span>
+            </div>
+            <button class="btn btn-primary" style="font-size:12px; padding:5px 12px;" id="btnApplyAllCandidateFields">
+              Accept All Candidate Fields
+            </button>
+          </div>
+
+          <table class="diff-table">
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Current Disk Tag</th>
+                <th>Provider Candidate Tag</th>
+                <th style="text-align:right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="diffTableBody">
+              <!-- Diff rows -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT SIDEBAR: Synced Lyrics Editor -->
+    <aside class="studio-sidebar-right">
+      <div class="lyrics-header">
+        <div>
+          <span class="section-title" style="font-size:13px;">🎤 Synced Lyrics</span>
+          <div class="lyrics-track-title" id="lyricsCurrentTrack">Select a track</div>
+        </div>
+        <span class="lrc-badge missing" id="lyricsStatusBadge">None</span>
+      </div>
+
+      <!-- Offset Adjustment Toolbar -->
+      <div class="lyrics-offset-toolbar">
+        <span class="offset-label">OFFSET:</span>
+        <button class="btn-offset" id="btnOffsetMinus500" title="Shift -500ms">-500ms</button>
+        <button class="btn-offset" id="btnOffsetMinus200" title="Shift -200ms">-200ms</button>
+        <button class="btn-offset" id="btnOffsetPlus200" title="Shift +200ms">+200ms</button>
+        <button class="btn-offset" id="btnOffsetPlus500" title="Shift +500ms">+500ms</button>
+      </div>
+
+      <!-- Lyrics Editor Textarea -->
+      <div class="lyrics-editor-wrap">
+        <textarea class="lyrics-textarea" id="lyricsTextarea" placeholder="[00:00.00] Synchronized lyrics will appear here...&#10;Click 'Fetch LRCLIB' to query lrclib.net" spellcheck="false"></textarea>
+        
+        <div class="lyrics-footer">
+          <span id="lyricsLineCount">0 lines</span>
+          <button class="btn btn-secondary" style="font-size:10px; padding:3px 7px;" id="btnFetchLrcLib">
+            ⚡ Fetch LRCLIB
+          </button>
+        </div>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- ================= MODAL: LIBRARY ALBUM BROWSER ================= -->
+  <div class="modal-overlay" id="modalLibrary">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Library Album Browser</h3>
+        <button class="btn btn-secondary btn-icon" id="btnCloseLibraryModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="text" class="form-input" id="libFilterInput" placeholder="Filter albums by artist or title...">
+        <div class="lib-album-list" id="libAlbumList">
+          <!-- Album items -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnDismissLibraryModal">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: KEYBOARD SHORTCUTS ================= -->
+  <div class="modal-overlay" id="modalShortcuts">
+    <div class="modal-card" style="max-width: 500px;">
+      <div class="modal-header">
+        <h3 class="modal-title">Keyboard Shortcuts</h3>
+        <button class="btn btn-secondary btn-icon" id="btnCloseShortcutsModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="shortcuts-grid">
+          <div><span class="key-badge">Ctrl + S</span> / <span class="key-badge">Cmd + S</span></div>
+          <div>Save all modified metadata & sync tags</div>
+
+          <div><span class="key-badge">Tab</span> / <span class="key-badge">Shift + Tab</span></div>
+          <div>Navigate to next / previous editable cell</div>
+
+          <div><span class="key-badge">Enter</span></div>
+          <div>Edit cell or commit and move to next row</div>
+
+          <div><span class="key-badge">↑</span> <span class="key-badge">↓</span> <span class="key-badge">←</span> <span class="key-badge">→</span></div>
+          <div>Move cell selection focus in grid</div>
+
+          <div><span class="key-badge">Esc</span></div>
+          <div>Cancel inline cell edit or close dialogs</div>
+
+          <div><span class="key-badge">?</span></div>
+          <div>Toggle this keyboard shortcuts dialog</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="btnDismissShortcutsModal">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: AUTH SETTINGS ================= -->
+  <div class="modal-overlay" id="modalAuth">
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-header">
+        <h3 class="modal-title">Authentication Settings</h3>
+        <button class="btn btn-secondary btn-icon" id="btnCloseAuthModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:13px; color:var(--text-muted);">
+          When accessing Aura Studio directly outside Telegram, provide your Telegram WebApp authentication data string or admin token.
+        </p>
+        <div class="form-group">
+          <label class="form-label">Telegram initData or Admin Token</label>
+          <textarea class="form-input" id="authInputToken" style="height:90px; padding:8px; font-family:var(--font-mono); font-size:11px;" placeholder="Paste initData string here..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnDismissAuthModal">Cancel</button>
+        <button class="btn btn-primary" id="btnSaveAuthToken">Save Token</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer"></div>
+
+  <!-- Main Metadata Studio Script -->
+  <script src="js/studio.js"></script>
+</body>
+</html>
