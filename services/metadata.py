@@ -1284,12 +1284,14 @@ class DiscogsProvider:
 # LYRICS INTEGRATION HELPER (LRCLIB)
 # =====================================================================
 
-async def fetch_lrclib_lyrics_async(title: str, artist: str = "") -> Tuple[str, str]:
-    """Queries LRCLIB for synced and unsynced lyrics text asynchronously."""
+async def fetch_lrclib_lyrics_pair_async(title: str, artist: str = "") -> Tuple[str, str]:
+    """Queries LRCLIB for synced and unsynced lyrics text asynchronously as a (synced, plain) tuple."""
     params = urllib.parse.urlencode({"track_name": title, "artist_name": artist})
-    url = f"https://lrclib.net/api/get?{params}"
+    lrclib_base = getattr(config, "LRCLIB_API_URL", "https://lrclib.net").rstrip("/")
+    url = f"{lrclib_base}/api/get?{params}"
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        timeout = getattr(config, "METADATA_HTTP_TIMEOUT", 6.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(url, headers={"User-Agent": "AuraHub/1.0"})
             if resp.status_code == 200:
                 data = resp.json()
@@ -1620,7 +1622,9 @@ async def fetch_lrclib_lyrics_async(track: str, artist: str = "") -> Dict[str, s
         artists_to_try = [""]
     title_variants = franco_to_arabic(track)
 
-    async with httpx.AsyncClient(timeout=8.0, headers=headers) as client:
+    lrclib_base = getattr(config, "LRCLIB_API_URL", "https://lrclib.net").rstrip("/")
+    timeout = getattr(config, "METADATA_HTTP_TIMEOUT", 8.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
         for art in artists_to_try:
             for tit in title_variants:
                 # 1. Exact match attempt
@@ -1628,7 +1632,7 @@ async def fetch_lrclib_lyrics_async(track: str, artist: str = "") -> Dict[str, s
                     params = {"track_name": tit}
                     if art:
                         params["artist_name"] = art
-                    resp = await client.get("https://lrclib.net/api/get", params=params)
+                    resp = await client.get(f"{lrclib_base}/api/get", params=params)
                     if resp.status_code == 200:
                         data = resp.json()
                         synced = data.get("syncedLyrics") or ""
@@ -1641,7 +1645,7 @@ async def fetch_lrclib_lyrics_async(track: str, artist: str = "") -> Dict[str, s
                 # 2. Search fallback
                 try:
                     query_str = f"{art} {tit}".strip()
-                    resp = await client.get("https://lrclib.net/api/search", params={"q": query_str})
+                    resp = await client.get(f"{lrclib_base}/api/search", params={"q": query_str})
                     if resp.status_code == 200:
                         results = resp.json()
                         if isinstance(results, list):

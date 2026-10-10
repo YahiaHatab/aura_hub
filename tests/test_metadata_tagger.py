@@ -572,6 +572,36 @@ class TestUnifiedTaggerEngine(unittest.TestCase):
         self.assertEqual(top["fields"]["lyrics_synced"], "[00:05.00] Tamally maak")
 
 
+    def test_id3v24_tipl_and_sylt_tagging(self):
+        """Verifies that ID3v2.4 correctly writes TIPL (involved people) and SYLT frames."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            file_path = Path(tmp_dir) / "track.mp3"
+            file_path.write_bytes(b"\xff\xfb\x90\x00" + b"\x00" * 1024)
+
+            payload = {
+                "title": "Song v2.4",
+                "artist": "Artist",
+                "producers": ["Top Producer"],
+                "arrangers": ["Master Arranger"],
+                "lyrics_synced": "[00:10.50] Hello world\n[00:15.00] Second line",
+            }
+            ok = write_tags(file_path, payload)
+            self.assertTrue(ok)
+
+            id3 = ID3(str(file_path))
+            # Verify TIPL or IPLS frame present
+            tipls = id3.getall("TIPL")
+            ipls = id3.getall("IPLS")
+            self.assertTrue(len(tipls) > 0 or len(ipls) > 0)
+
+            # Verify SYLT frame present
+            sylts = id3.getall("SYLT")
+            self.assertEqual(len(sylts), 1)
+            self.assertEqual(len(sylts[0].text), 2)
+            self.assertEqual(sylts[0].text[0][0], "Hello world")
+            self.assertEqual(sylts[0].text[0][1], 10500)
+
+
 if __name__ == "__main__":
     unittest.main()
 

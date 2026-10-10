@@ -24,11 +24,13 @@ from mutagen.id3 import (
     APIC,
     ID3,
     IPLS,
+    SYLT,
     TALB,
     TCOM,
     TCON,
     TDRC,
     TEXT,
+    TIPL,
     TIT2,
     TPE1,
     TPE2,
@@ -86,6 +88,41 @@ def write_loose_cover(folder: Union[str, Path], cover_bytes: bytes) -> Optional[
     except Exception as e:
         logger.warning(f"Failed to write loose cover.jpg: {e}")
         return None
+
+
+def parse_lrc_to_sylt_data(lrc_text: str) -> List[Tuple[str, int]]:
+    """Parses standard LRC lyrics into Mutagen SYLT format: [(text, milliseconds), ...]."""
+    if not lrc_text:
+        return []
+    sylt_entries: List[Tuple[str, int]] = []
+    pattern = re.compile(r"^\[(\d+):(\d+(?:\.\d+)?)\](.*)$")
+    for line in lrc_text.splitlines():
+        line = line.strip()
+        match = pattern.match(line)
+        if match:
+            mins = int(match.group(1))
+            secs = float(match.group(2))
+            text = match.group(3).strip()
+            ms = int((mins * 60 + secs) * 1000)
+            sylt_entries.append((text, ms))
+    return sylt_entries
+
+
+def _safe_save_mutagen(audio_obj: Any, file_path: Union[str, Path], **save_kwargs: Any) -> bool:
+    """Saves a Mutagen audio object with retry logic to withstand WebDAV share lock latency."""
+    path_str = str(file_path)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            audio_obj.save(path_str, **save_kwargs)
+            return True
+        except (PermissionError, OSError) as e:
+            if attempt == max_retries - 1:
+                logger.warning(f"Failed to save audio tags to {path_str} after {max_retries} attempts: {e}")
+                raise
+            import time
+            time.sleep(0.15 * (attempt + 1))
+    return False
 
 
 # =====================================================================
@@ -674,9 +711,11 @@ def write_tags(
                     if frame.desc.upper() == "PRODUCER":
                         audio.delall(frame.HashKey)
                 audio.delall("IPLS")
+                audio.delall("TIPL")
                 if p_str:
                     audio.add(TXXX(encoding=3, desc="PRODUCER", text=p_str))
                     audio.add(IPLS(encoding=3, people=[("producer", p_str)]))
+                    audio.add(TIPL(encoding=3, people=[("producer", p_str)]))
 
             if "arrangers" in fields and fields["arrangers"] is not None:
                 arrs = fields["arrangers"]
@@ -686,6 +725,7 @@ def write_tags(
                         audio.delall(frame.HashKey)
                 if a_str:
                     audio.add(TXXX(encoding=3, desc="ARRANGER", text=a_str))
+                    audio.add(TIPL(encoding=3, people=[("arranger", a_str)]))
 
             if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
                 audio.delall("USLT")
@@ -693,12 +733,19 @@ def write_tags(
                 if u_text:
                     audio.add(USLT(encoding=3, lang="eng", desc="", text=u_text))
 
+            if "lyrics_synced" in fields and fields["lyrics_synced"] is not None:
+                sylt_entries = parse_lrc_to_sylt_data(str(fields["lyrics_synced"]))
+                audio.delall("SYLT")
+                if sylt_entries:
+                    audio.add(SYLT(encoding=3, lang="eng", format=1, type=1, desc="", text=sylt_entries))
+
             if cover_bytes:
                 audio.delall("APIC")
                 mime = "image/png" if cover_bytes.startswith(b"\x89PNG") else "image/jpeg"
                 audio.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=cover_bytes))
 
-            audio.save(str(path), v2_version=3)
+            v2_ver = getattr(config, "ID3_V2_VERSION", 4)
+            _safe_save_mutagen(audio, path, v2_version=v2_ver)
             return True
 
         # B. FLAC (Vorbis comments & Picture)
@@ -753,7 +800,7 @@ def write_tags(
                 pic.desc = "Cover"
                 audio.add_picture(pic)
 
-            audio.save()
+            _safe_save_mutagen(audio, path)
             return True
 
         # C. Opus (OggOpus Vorbis comments & metadata_block_picture)
@@ -804,7 +851,7 @@ def write_tags(
                 pic.desc = "Cover"
                 audio["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
 
-            audio.save()
+            _safe_save_mutagen(audio, path)
             return True
 
         # D. M4A / MP4
@@ -844,6 +891,11 @@ def write_tags(
                 p_str = ", ".join(prods) if isinstance(prods, list) else str(prods).strip()
                 if p_str:
                     audio["----:com.apple.iTunes:PRODUCER"] = [p_str.encode("utf-8")]
+            if "arrangers" in fields and fields["arrangers"] is not None:
+                arrs = fields["arrangers"]
+                a_str = ", ".join(arrs) if isinstance(arrs, list) else str(arrs).strip()
+                if a_str:
+                    audio["----:com.apple.iTunes:ARRANGER"] = [a_str.encode("utf-8")]
             if "lyrics_unsynced" in fields and fields["lyrics_unsynced"] is not None:
                 audio["\xa9lyr"] = [str(fields["lyrics_unsynced"]).strip()]
 
@@ -855,7 +907,7 @@ def write_tags(
                 )
                 audio["covr"] = [MP4Cover(cover_bytes, imageformat=cov_fmt)]
 
-            audio.save()
+            _safe_save_mutagen(audio, path)
             return True
 
     except Exception as e:
@@ -940,14 +992,23 @@ def apply_unified_metadata_to_file(
                 p_str = ", ".join(track.producers)
                 audio.add(TXXX(encoding=3, desc="PRODUCER", text=p_str))
                 audio.add(IPLS(encoding=3, people=[("producer", p_str)]))
+                audio.add(TIPL(encoding=3, people=[("producer", p_str)]))
 
             if track.arrangers:
-                audio.add(TXXX(encoding=3, desc="ARRANGER", text=", ".join(track.arrangers)))
+                a_str = ", ".join(track.arrangers)
+                audio.add(TXXX(encoding=3, desc="ARRANGER", text=a_str))
+                audio.add(TIPL(encoding=3, people=[("arranger", a_str)]))
 
             lyrics_text = track.lyrics_unsynced or track.lyrics_synced
             if lyrics_text:
                 audio.delall("USLT")
                 audio.add(USLT(encoding=3, lang="eng", desc="", text=lyrics_text))
+
+            if track.lyrics_synced:
+                sylt_entries = parse_lrc_to_sylt_data(track.lyrics_synced)
+                audio.delall("SYLT")
+                if sylt_entries:
+                    audio.add(SYLT(encoding=3, lang="eng", format=1, type=1, desc="", text=sylt_entries))
 
             if effective_cover:
                 audio.delall("APIC")
@@ -962,7 +1023,8 @@ def apply_unified_metadata_to_file(
                     )
                 )
 
-            audio.save(str(path), v2_version=3)
+            v2_ver = getattr(config, "ID3_V2_VERSION", 4)
+            _safe_save_mutagen(audio, path, v2_version=v2_ver)
             return True
 
         # 2. FLAC (Vorbis comments & Picture)
@@ -1018,7 +1080,7 @@ def apply_unified_metadata_to_file(
                 pic.desc = "Cover"
                 audio.add_picture(pic)
 
-            audio.save()
+            _safe_save_mutagen(audio, path)
             return True
 
         # 3. Opus (OggOpus Vorbis comments & metadata_block_picture)
@@ -1068,7 +1130,7 @@ def apply_unified_metadata_to_file(
                 p.desc = "Cover"
                 audio["metadata_block_picture"] = [base64.b64encode(p.write()).decode("ascii")]
 
-            audio.save()
+            _safe_save_mutagen(audio, path)
             return True
 
         # 4. M4A / MP4
@@ -1101,6 +1163,9 @@ def apply_unified_metadata_to_file(
             if track.producers:
                 audio["----:com.apple.iTunes:PRODUCER"] = [", ".join(track.producers).encode("utf-8")]
 
+            if track.arrangers:
+                audio["----:com.apple.iTunes:ARRANGER"] = [", ".join(track.arrangers).encode("utf-8")]
+
             lyrics_text = track.lyrics_unsynced or track.lyrics_synced
             if lyrics_text:
                 audio["\xa9lyr"] = [lyrics_text]
@@ -1113,7 +1178,7 @@ def apply_unified_metadata_to_file(
                 )
                 audio["covr"] = [MP4Cover(effective_cover, imageformat=cov_fmt)]
 
-            audio.save()
+            _safe_save_mutagen(audio, path)
             return True
 
     except Exception as e:
@@ -1745,7 +1810,8 @@ def tag_playlist_hybrid(
                 audio.delall("USLT")
                 audio.add(USLT(encoding=3, lang="eng", desc="", text=lyrics_text))
 
-            audio.save(str(file_path), v2_version=3)
+            v2_ver = getattr(config, "ID3_V2_VERSION", 4)
+            _safe_save_mutagen(audio, file_path, v2_version=v2_ver)
 
         elif f_ext == ".opus":
             try:
@@ -1758,7 +1824,7 @@ def tag_playlist_hybrid(
                     audio["genre"] = [resolved_genre]
                 if lyrics_text:
                     audio["lyrics"] = [lyrics_text]
-                audio.save()
+                _safe_save_mutagen(audio, file_path)
             except Exception as e:
                 logger.warning(f"Failed to tag playlist Opus track {file_path.name}: {e}")
 
@@ -1773,7 +1839,7 @@ def tag_playlist_hybrid(
                     audio["genre"] = [resolved_genre]
                 if lyrics_text:
                     audio["lyrics"] = [lyrics_text]
-                audio.save()
+                _safe_save_mutagen(audio, file_path)
             except Exception as e:
                 logger.warning(f"Failed to tag playlist FLAC track {file_path.name}: {e}")
 
@@ -1788,7 +1854,7 @@ def tag_playlist_hybrid(
                     audio["\xa9gen"] = [resolved_genre]
                 if lyrics_text:
                     audio["\xa9lyr"] = [lyrics_text]
-                audio.save()
+                _safe_save_mutagen(audio, file_path)
             except Exception as e:
                 logger.warning(f"Failed to tag playlist M4A track {file_path.name}: {e}")
 

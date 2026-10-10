@@ -61,6 +61,10 @@ DISCOGS_API_TOKEN = os.environ.get("DISCOGS_API_TOKEN", "")
 # ================= METADATA PROVIDERS CONFIGURATION =================
 MB_RATE_LIMIT_DELAY = float(os.environ.get("MB_RATE_LIMIT_DELAY", "1.0"))
 METADATA_HTTP_TIMEOUT = float(os.environ.get("METADATA_HTTP_TIMEOUT", "8.0"))
+LRCLIB_API_URL = os.environ.get("LRCLIB_API_URL", "https://lrclib.net").rstrip("/")
+DEEZER_API_URL = os.environ.get("DEEZER_API_URL", "https://api.deezer.com").rstrip("/")
+ITUNES_API_URL = os.environ.get("ITUNES_API_URL", "https://itunes.apple.com").rstrip("/")
+ID3_V2_VERSION = int(os.environ.get("ID3_V2_VERSION", "4"))
 
 
 # ================= STORAGE & PATHS =================
