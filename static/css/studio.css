@@ -300,6 +300,7 @@ body {
 .app-view {
   flex: 1;
   height: calc(100vh - 60px);
+  min-height: 0 !important;
   overflow: hidden;
   display: none;
 }
@@ -1328,9 +1329,9 @@ body {
 
 /* ================= VIEW: EXPANDED LIBRARY BROWSER ================= */
 .library-view-container {
-  flex: 1;
+  flex: 1 1 auto;
   height: 100%;
-  overflow-y: auto;
+  min-height: 0 !important;
   padding: 24px 32px;
   display: flex;
   flex-direction: column;
@@ -1338,9 +1339,22 @@ body {
   max-width: 1500px;
   margin: 0 auto;
   width: 100%;
+  overflow: hidden;
+}
+
+/* Ensure the modal content body is constrained and manages overflow */
+.library-modal,
+.library-modal-content,
+#library-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh; /* Or calc(100vh - 100px) */
+  min-height: 0 !important;
+  overflow: hidden;  /* Keep search bar and modal header pinned at top */
 }
 
 .library-header-bar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1356,7 +1370,53 @@ body {
   flex: 1;
 }
 
-/* Artist Collapsible Tree */
+/* Force the scrollable tree / card container to scroll smoothly */
+.library-list,
+.library-albums-container,
+.library-tree-container,
+.artist-tree-container,
+#library-list,
+#artistTreeContainer {
+  flex: 1 1 auto;
+  min-height: 0 !important;      /* Essential for flex children to allow overflow */
+  max-height: calc(85vh - 120px); /* Bounded fallback */
+  overflow-y: auto !important;   /* Force vertical scrollbar */
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-right: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Expand max-height for full-screen library view container */
+.library-view-container .library-list,
+.library-view-container .library-albums-container,
+.library-view-container .library-tree-container,
+.library-view-container .artist-tree-container,
+.library-view-container #library-list,
+.library-view-container #artistTreeContainer {
+  max-height: calc(100vh - 170px);
+}
+
+/* Ensure custom scrollbars are styled and visible */
+.library-list::-webkit-scrollbar,
+.library-albums-container::-webkit-scrollbar,
+.library-tree-container::-webkit-scrollbar,
+.artist-tree-container::-webkit-scrollbar,
+#library-list::-webkit-scrollbar,
+#artistTreeContainer::-webkit-scrollbar {
+  width: 6px;
+}
+.library-list::-webkit-scrollbar-thumb,
+.library-albums-container::-webkit-scrollbar-thumb,
+.library-tree-container::-webkit-scrollbar-thumb,
+.artist-tree-container::-webkit-scrollbar-thumb,
+#library-list::-webkit-scrollbar-thumb,
+#artistTreeContainer::-webkit-scrollbar-thumb {
+  background: var(--border-color, #334155);
+  border-radius: 3px;
+}
+
+/* Artist Collapsible Tree Group */
 .artist-tree-container {
   display: flex;
   flex-direction: column;

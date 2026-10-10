@@ -1177,11 +1177,17 @@
     }
   }
 
+  function getLibraryContainer() {
+    return document.getElementById('artistTreeContainer') || document.getElementById('library-list') || document.querySelector('.library-list');
+  }
+
   // ================= EXPANDED LIBRARY BROWSER WITH ARTIST TREE =================
   async function loadLibraryTree() {
-    const container = document.getElementById('artistTreeContainer');
+    const container = getLibraryContainer();
     const summary = document.getElementById('libraryStatsSummary');
-    container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-dim);">Scanning Navidrome library...</div>`;
+    if (container) {
+      container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-dim);">Scanning Navidrome library...</div>`;
+    }
 
     try {
       const res = await apiRequest('/api/library');
@@ -1200,15 +1206,20 @@
         totalTracks += (alb.track_count || 0);
       });
 
-      summary.textContent = `${state.libraryAlbums.length} albums across ${artistMap.size} artists (${totalTracks} tracks)`;
+      if (summary) {
+        summary.textContent = `${state.libraryAlbums.length} albums across ${artistMap.size} artists (${totalTracks} tracks)`;
+      }
       renderArtistTree(artistMap);
     } catch (err) {
-      container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--accent-rose);">Failed to load library: ${escapeHtml(err.message)}</div>`;
+      if (container) {
+        container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--accent-rose);">Failed to load library: ${escapeHtml(err.message)}</div>`;
+      }
     }
   }
 
   function renderArtistTree(artistMap, filterQuery = '') {
-    const container = document.getElementById('artistTreeContainer');
+    const container = getLibraryContainer();
+    if (!container) return;
     container.innerHTML = '';
 
     const cleanFilter = filterQuery.toLowerCase().trim();
